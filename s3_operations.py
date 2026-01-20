@@ -33,6 +33,26 @@ class S3Operations:
         except Exception as e:
             return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
     
+    def create_bucket_with_object_lock(self, bucket_name: str) -> dict:
+        """Create an S3 bucket with Object Lock enabled."""
+        try:
+            if self.config.region == 'us-east-1':
+                self.s3_client.create_bucket(
+                    Bucket=bucket_name,
+                    ObjectLockEnabledForBucket=True
+                )
+            else:
+                self.s3_client.create_bucket(
+                    Bucket=bucket_name,
+                    CreateBucketConfiguration={'LocationConstraint': self.config.region},
+                    ObjectLockEnabledForBucket=True
+                )
+            return {'status': 'success', 'message': f'Bucket {bucket_name} created with Object Lock enabled'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
     def put_object(self, bucket_name: str, object_key: str, file_path: str) -> dict:
         """Upload an object to S3."""
         try:
@@ -436,6 +456,261 @@ class S3Operations:
                 'uploads_count': uploads,
                 'message': f'Found {uploads} ongoing multipart uploads'
             }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    # ============ OBJECT LOCK OPERATIONS ============
+    
+    def get_object_lock_configuration(self, bucket_name: str) -> dict:
+        """Get Object Lock configuration for a bucket."""
+        try:
+            response = self.s3_client.get_object_lock_configuration(Bucket=bucket_name)
+            config = response.get('ObjectLockConfiguration', {})
+            return {
+                'status': 'success',
+                'enabled': config.get('ObjectLockEnabled') == 'Enabled',
+                'rule': config.get('Rule', {}),
+                'message': f'Object Lock configuration retrieved'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def put_object_lock_configuration(self, bucket_name: str, mode: str = 'GOVERNANCE', days: int = 30) -> dict:
+        """Set default retention for Object Lock."""
+        try:
+            self.s3_client.put_object_lock_configuration(
+                Bucket=bucket_name,
+                ObjectLockConfiguration={
+                    'ObjectLockEnabled': 'Enabled',
+                    'Rule': {
+                        'DefaultRetention': {
+                            'Mode': mode,  # GOVERNANCE or COMPLIANCE
+                            'Days': days
+                        }
+                    }
+                }
+            )
+            return {'status': 'success', 'message': f'Object Lock default retention set to {mode} mode for {days} days'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def put_object_retention(self, bucket_name: str, object_key: str, mode: str = 'GOVERNANCE', days: int = 30) -> dict:
+        """Set retention on a specific object."""
+        try:
+            from datetime import datetime, timedelta
+            retain_until = datetime.utcnow() + timedelta(days=days)
+            
+            self.s3_client.put_object_retention(
+                Bucket=bucket_name,
+                Key=object_key,
+                Retention={
+                    'Mode': mode,
+                    'RetainUntilDate': retain_until
+                }
+            )
+            return {'status': 'success', 'message': f'Object retention set to {mode} mode until {retain_until.isoformat()}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_object_retention(self, bucket_name: str, object_key: str) -> dict:
+        """Get retention settings for an object."""
+        try:
+            response = self.s3_client.get_object_retention(Bucket=bucket_name, Key=object_key)
+            retention = response.get('Retention', {})
+            return {
+                'status': 'success',
+                'mode': retention.get('Mode'),
+                'retain_until': retention.get('RetainUntilDate'),
+                'message': f'Object retention mode: {retention.get("Mode")}'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def put_object_legal_hold(self, bucket_name: str, object_key: str, status: str = 'ON') -> dict:
+        """Set legal hold on an object."""
+        try:
+            self.s3_client.put_object_legal_hold(
+                Bucket=bucket_name,
+                Key=object_key,
+                LegalHold={'Status': status}  # ON or OFF
+            )
+            return {'status': 'success', 'message': f'Legal hold {status} for object {object_key}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_object_legal_hold(self, bucket_name: str, object_key: str) -> dict:
+        """Get legal hold status for an object."""
+        try:
+            response = self.s3_client.get_object_legal_hold(Bucket=bucket_name, Key=object_key)
+            legal_hold = response.get('LegalHold', {})
+            return {
+                'status': 'success',
+                'legal_hold_status': legal_hold.get('Status'),
+                'message': f'Legal hold status: {legal_hold.get("Status")}'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}    
+    # ============ SSE (SERVER-SIDE ENCRYPTION) OPERATIONS ============
+    
+    def put_bucket_encryption(self, bucket_name: str, sse_algorithm: str = 'AES256') -> dict:
+        """Enable server-side encryption for a bucket."""
+        try:
+            if sse_algorithm == 'aws:kms':
+                encryption_config = {
+                    'Rules': [{
+                        'ApplyServerSideEncryptionByDefault': {
+                            'SSEAlgorithm': 'aws:kms'
+                        }
+                    }]
+                }
+            else:
+                encryption_config = {
+                    'Rules': [{
+                        'ApplyServerSideEncryptionByDefault': {
+                            'SSEAlgorithm': 'AES256'
+                        }
+                    }]
+                }
+            
+            self.s3_client.put_bucket_encryption(
+                Bucket=bucket_name,
+                ServerSideEncryptionConfiguration=encryption_config
+            )
+            return {'status': 'success', 'message': f'Bucket encryption enabled with {sse_algorithm}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_bucket_encryption(self, bucket_name: str) -> dict:
+        """Get bucket encryption configuration."""
+        try:
+            response = self.s3_client.get_bucket_encryption(Bucket=bucket_name)
+            config = response.get('ServerSideEncryptionConfiguration', {})
+            rules = config.get('Rules', [])
+            sse_algo = rules[0]['ApplyServerSideEncryptionByDefault']['SSEAlgorithm'] if rules else 'None'
+            return {
+                'status': 'success',
+                'sse_algorithm': sse_algo,
+                'message': f'Bucket encryption: {sse_algo}'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def put_object_with_sse(self, bucket_name: str, object_key: str, file_path: str, sse_algorithm: str = 'AES256') -> dict:
+        """Upload an object with server-side encryption."""
+        try:
+            with open(file_path, 'rb') as f:
+                self.s3_client.put_object(
+                    Bucket=bucket_name,
+                    Key=object_key,
+                    Body=f,
+                    ServerSideEncryption=sse_algorithm
+                )
+            return {'status': 'success', 'message': f'Object {object_key} uploaded with {sse_algorithm} encryption'}
+        except FileNotFoundError:
+            return {'status': 'error', 'message': f'File not found: {file_path}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_object_with_sse(self, bucket_name: str, object_key: str, file_path: str = None) -> dict:
+        """Download an encrypted object and verify encryption."""
+        try:
+            response = self.s3_client.get_object(Bucket=bucket_name, Key=object_key)
+            sse_algo = response.get('ServerSideEncryption', 'None')
+            
+            if file_path:
+                with open(file_path, 'wb') as f:
+                    f.write(response['Body'].read())
+            else:
+                response['Body'].read()
+            
+            return {
+                'status': 'success',
+                'encryption': sse_algo,
+                'size': response['ContentLength'],
+                'message': f'Object downloaded with {sse_algo} encryption'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def delete_bucket_encryption(self, bucket_name: str) -> dict:
+        """Remove encryption from a bucket."""
+        try:
+            self.s3_client.delete_bucket_encryption(Bucket=bucket_name)
+            return {'status': 'success', 'message': f'Bucket encryption removed'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    # ============ LIFECYCLE RULES OPERATIONS ============
+    
+    def put_bucket_lifecycle_configuration(self, bucket_name: str, rules: list = None) -> dict:
+        """Set lifecycle configuration for a bucket."""
+        try:
+            if rules is None:
+                rules = [
+                    {
+                        'ID': 'ExpireCurrentAndOld1Day',
+                        'Status': 'Enabled',
+                        'Prefix': '',
+                        'Expiration': {'Days': 1},
+                        'NoncurrentVersionExpiration': {'NoncurrentDays': 1}
+                    }
+                ]
+            
+            self.s3_client.put_bucket_lifecycle_configuration(
+                Bucket=bucket_name,
+                LifecycleConfiguration={'Rules': rules}
+            )
+            return {'status': 'success', 'message': f'Lifecycle rules configured for {bucket_name}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_bucket_lifecycle_configuration(self, bucket_name: str) -> dict:
+        """Get lifecycle configuration for a bucket."""
+        try:
+            response = self.s3_client.get_bucket_lifecycle_configuration(Bucket=bucket_name)
+            rules = response.get('Rules', [])
+            return {
+                'status': 'success',
+                'rules_count': len(rules),
+                'rules': [{'Id': r.get('Id'), 'Status': r.get('Status')} for r in rules],
+                'message': f'Found {len(rules)} lifecycle rules'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def delete_bucket_lifecycle_configuration(self, bucket_name: str) -> dict:
+        """Delete lifecycle configuration from a bucket."""
+        try:
+            self.s3_client.delete_bucket_lifecycle(Bucket=bucket_name)
+            return {'status': 'success', 'message': f'Lifecycle configuration deleted'}
         except ClientError as e:
             return {'status': 'error', 'message': str(e)}
         except Exception as e:

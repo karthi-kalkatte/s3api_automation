@@ -41,6 +41,15 @@ LARGE FILE OPERATIONS:
   - put_delete_5mb_immediate (Upload 5MB and delete immediately)
   - put_get_1kb_immediate (Upload 1KB and download immediately)
   - put_delete_1kb_immediate (Upload 1KB and delete immediately)
+
+OBJECT LOCK OPERATIONS:
+  - create_bucket_with_object_lock (Create bucket with WORM protection)
+  - get_object_lock_configuration (Get Object Lock configuration)
+  - put_object_lock_configuration (Set default retention)
+  - put_object_retention (Set retention on specific object)
+  - get_object_retention (Get object retention status)
+  - put_object_legal_hold (Place legal hold on object)
+  - get_object_legal_hold (Get legal hold status)
         """
     )
     

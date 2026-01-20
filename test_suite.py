@@ -13,8 +13,10 @@ class S3TestSuite:
         self.s3_ops = S3Operations(self.config)
         self.test_results = []
         self.test_bucket = f"test-bucket-{os.urandom(4).hex()}"
+        self.test_bucket_lock = f"test-bucket-lock-{os.urandom(4).hex()}"
         self.test_object_key = "test-object.txt"
         self.test_object_key2 = "test-object-copy.txt"
+        self.test_object_lock_key = "test-object-lock-retention.txt"
         self.test_object_5mb = "test-object-5mb.bin"
         self.test_object_1kb = "test-object-1kb.bin"
         self.test_file_path = None
@@ -441,6 +443,136 @@ class S3TestSuite:
         self._log_result('put_delete_1kb_immediate', delete_result)
         return delete_result['status'] == 'success'
     
+    # ============ OBJECT LOCK TESTS ============
+    
+    def test_create_bucket_with_object_lock(self):
+        """Test: Create bucket with Object Lock"""
+        print("\n[TEST] Creating bucket with Object Lock...")
+        result = self.s3_ops.create_bucket_with_object_lock(self.test_bucket_lock)
+        self._log_result('create_bucket_with_object_lock', result)
+        return result['status'] == 'success'
+    
+    def test_get_object_lock_configuration(self):
+        """Test: Get Object Lock configuration"""
+        print("\n[TEST] Getting Object Lock configuration...")
+        result = self.s3_ops.get_object_lock_configuration(self.test_bucket_lock)
+        self._log_result('get_object_lock_configuration', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_lock_configuration(self):
+        """Test: Put Object Lock default retention"""
+        print("\n[TEST] Setting Object Lock default retention...")
+        result = self.s3_ops.put_object_lock_configuration(self.test_bucket_lock, mode='GOVERNANCE', days=30)
+        self._log_result('put_object_lock_configuration', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_retention(self):
+        """Test: Put Object retention on object"""
+        print("\n[TEST] Uploading object to lock bucket first...")
+        # First upload object to the lock bucket
+        upload_result = self.s3_ops.put_object(self.test_bucket_lock, self.test_object_lock_key, self.test_file_path)
+        if upload_result['status'] != 'success':
+            self._log_result('put_object_retention', upload_result)
+            return False
+        
+        print("  └─ Setting retention on object...")
+        result = self.s3_ops.put_object_retention(self.test_bucket_lock, self.test_object_lock_key, mode='GOVERNANCE', days=7)
+        self._log_result('put_object_retention', result)
+        return result['status'] == 'success'
+    
+    def test_get_object_retention(self):
+        """Test: Get Object retention"""
+        print("\n[TEST] Getting object retention...")
+        result = self.s3_ops.get_object_retention(self.test_bucket_lock, self.test_object_lock_key)
+        self._log_result('get_object_retention', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_legal_hold(self):
+        """Test: Put legal hold on object"""
+        print("\n[TEST] Setting legal hold on object...")
+        result = self.s3_ops.put_object_legal_hold(self.test_bucket_lock, self.test_object_lock_key, status='ON')
+        self._log_result('put_object_legal_hold', result)
+        return result['status'] == 'success'
+    
+    def test_get_object_legal_hold(self):
+        """Test: Get legal hold status"""
+        print("\n[TEST] Getting legal hold status...")
+        result = self.s3_ops.get_object_legal_hold(self.test_bucket_lock, self.test_object_lock_key)
+        self._log_result('get_object_legal_hold', result)
+        return result['status'] == 'success'
+    
+    # ============ SSE (SERVER-SIDE ENCRYPTION) TESTS ============
+    
+    def test_put_bucket_encryption(self):
+        """Test: Enable bucket encryption"""
+        print("\n[TEST] Enabling bucket encryption...")
+        result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        self._log_result('put_bucket_encryption', result)
+        return result['status'] == 'success'
+    
+    def test_get_bucket_encryption(self):
+        """Test: Get bucket encryption configuration"""
+        print("\n[TEST] Getting bucket encryption configuration...")
+        result = self.s3_ops.get_bucket_encryption(self.test_bucket)
+        self._log_result('get_bucket_encryption', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_with_sse(self):
+        """Test: Upload object with SSE encryption"""
+        print("\n[TEST] Uploading object with SSE...")
+        result = self.s3_ops.put_object_with_sse(self.test_bucket, 'sse-object.txt', self.test_file_path, sse_algorithm='AES256')
+        self._log_result('put_object_with_sse', result)
+        return result['status'] == 'success'
+    
+    def test_get_object_with_sse(self):
+        """Test: Download encrypted object and verify encryption"""
+        print("\n[TEST] Downloading encrypted object...")
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.txt').name
+        result = self.s3_ops.get_object_with_sse(self.test_bucket, 'sse-object.txt', download_path)
+        self._log_result('get_object_with_sse', result)
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        return result['status'] == 'success'
+    
+    def test_delete_bucket_encryption(self):
+        """Test: Remove bucket encryption"""
+        print("\n[TEST] Removing bucket encryption...")
+        result = self.s3_ops.delete_bucket_encryption(self.test_bucket)
+        self._log_result('delete_bucket_encryption', result)
+        return result['status'] == 'success'
+    
+    # ============ LIFECYCLE RULES TESTS ============
+    
+    def test_put_bucket_lifecycle_configuration(self):
+        """Test: Set lifecycle rules"""
+        print("\n[TEST] Setting lifecycle configuration...")
+        rules = [
+            {
+                'ID': 'ExpireCurrentAndOld1Day',
+                'Status': 'Enabled',
+                'Prefix': '',
+                'Expiration': {'Days': 1},
+                'NoncurrentVersionExpiration': {'NoncurrentDays': 1}
+            }
+        ]
+        result = self.s3_ops.put_bucket_lifecycle_configuration(self.test_bucket, rules=rules)
+        self._log_result('put_bucket_lifecycle_configuration', result)
+        return result['status'] == 'success'
+    
+    def test_get_bucket_lifecycle_configuration(self):
+        """Test: Get lifecycle rules"""
+        print("\n[TEST] Getting lifecycle configuration...")
+        result = self.s3_ops.get_bucket_lifecycle_configuration(self.test_bucket)
+        self._log_result('get_bucket_lifecycle_configuration', result)
+        return result['status'] == 'success'
+    
+    def test_delete_bucket_lifecycle_configuration(self):
+        """Test: Delete lifecycle rules"""
+        print("\n[TEST] Deleting lifecycle configuration...")
+        result = self.s3_ops.delete_bucket_lifecycle_configuration(self.test_bucket)
+        self._log_result('delete_bucket_lifecycle_configuration', result)
+        return result['status'] == 'success'
+    
     def _log_result(self, test_name: str, result: dict):
         """Log test result."""
         status = result.get('status', 'unknown')
@@ -504,7 +636,33 @@ class S3TestSuite:
             self.test_list_object_versions()
             
             # Large File Operations
+            self.test_put_object_5mb()
+            self.test_get_object_5mb()
             self.test_put_get_5mb_immediate()
+            self.test_put_delete_5mb_immediate()
+            self.test_put_get_1kb_immediate()
+            self.test_put_delete_1kb_immediate()
+            
+            # SSE (Server-Side Encryption) Operations
+            self.test_put_bucket_encryption()
+            self.test_get_bucket_encryption()
+            self.test_put_object_with_sse()
+            self.test_get_object_with_sse()
+            
+            # Lifecycle Rules Operations
+            self.test_put_bucket_lifecycle_configuration()
+            self.test_get_bucket_lifecycle_configuration()
+            
+            # Object Lock Operations (requires separate bucket)
+            self.test_create_bucket_with_object_lock()
+            self.test_get_object_lock_configuration()
+            # Upload object BEFORE setting retention policies
+            self.test_put_object_retention()  # This uploads object first, then sets retention
+            self.test_get_object_retention()
+            self.test_put_object_legal_hold()
+            self.test_get_object_legal_hold()
+            # Set default retention AFTER object operations
+            self.test_put_object_lock_configuration()
             
             # Cleanup
             self.test_delete_bucket_tagging()
@@ -562,6 +720,24 @@ class S3TestSuite:
             'put_delete_5mb_immediate': self.test_put_delete_5mb_immediate,
             'put_get_1kb_immediate': self.test_put_get_1kb_immediate,
             'put_delete_1kb_immediate': self.test_put_delete_1kb_immediate,
+            # Object Lock Operations
+            'create_bucket_with_object_lock': self.test_create_bucket_with_object_lock,
+            'get_object_lock_configuration': self.test_get_object_lock_configuration,
+            'put_object_lock_configuration': self.test_put_object_lock_configuration,
+            'put_object_retention': self.test_put_object_retention,
+            'get_object_retention': self.test_get_object_retention,
+            'put_object_legal_hold': self.test_put_object_legal_hold,
+            'get_object_legal_hold': self.test_get_object_legal_hold,
+            # SSE Operations
+            'put_bucket_encryption': self.test_put_bucket_encryption,
+            'get_bucket_encryption': self.test_get_bucket_encryption,
+            'put_object_with_sse': self.test_put_object_with_sse,
+            'get_object_with_sse': self.test_get_object_with_sse,
+            'delete_bucket_encryption': self.test_delete_bucket_encryption,
+            # Lifecycle Rules Operations
+            'put_bucket_lifecycle_configuration': self.test_put_bucket_lifecycle_configuration,
+            'get_bucket_lifecycle_configuration': self.test_get_bucket_lifecycle_configuration,
+            'delete_bucket_lifecycle_configuration': self.test_delete_bucket_lifecycle_configuration,
         }
         
         if test_name not in test_methods:
