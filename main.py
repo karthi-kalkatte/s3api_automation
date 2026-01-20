@@ -25,6 +25,7 @@ BUCKET LEVEL OPERATIONS:
   - put_bucket_cors, get_bucket_cors, delete_bucket_cors
   - enable_bucket_versioning, get_bucket_versioning, suspend_bucket_versioning
   - put_public_access_block, get_public_access_block
+  - put_bucket_policy, get_bucket_policy, delete_bucket_policy
 
 OBJECT LEVEL OPERATIONS:
   - put_object, get_object, head_object, delete_object, delete_objects

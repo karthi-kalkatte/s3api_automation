@@ -312,6 +312,62 @@ class S3Operations:
         except Exception as e:
             return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
     
+    def put_bucket_policy(self, bucket_name: str, policy: dict = None) -> dict:
+        """Set bucket policy."""
+        try:
+            if policy is None:
+                # Default policy allowing all actions on bucket
+                policy = {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:*",
+                            "Resource": [
+                                f"arn:aws:s3:::{bucket_name}",
+                                f"arn:aws:s3:::{bucket_name}/*"
+                            ]
+                        }
+                    ]
+                }
+            
+            import json
+            policy_str = json.dumps(policy)
+            self.s3_client.put_bucket_policy(Bucket=bucket_name, Policy=policy_str)
+            return {'status': 'success', 'message': f'Bucket policy applied to {bucket_name}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_bucket_policy(self, bucket_name: str) -> dict:
+        """Get bucket policy."""
+        try:
+            response = self.s3_client.get_bucket_policy(Bucket=bucket_name)
+            policy = response.get('Policy', {})
+            return {
+                'status': 'success',
+                'policy': policy,
+                'message': f'Bucket policy retrieved for {bucket_name}'
+            }
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
+                return {'status': 'error', 'message': 'No bucket policy found'}
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def delete_bucket_policy(self, bucket_name: str) -> dict:
+        """Delete bucket policy."""
+        try:
+            self.s3_client.delete_bucket_policy(Bucket=bucket_name)
+            return {'status': 'success', 'message': f'Bucket policy deleted from {bucket_name}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
     # ============ OBJECT LEVEL OPERATIONS ============
     
     def get_object(self, bucket_name: str, object_key: str, file_path: str = None) -> dict:

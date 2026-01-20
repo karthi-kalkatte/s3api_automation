@@ -223,6 +223,29 @@ class S3TestSuite:
         self._log_result('get_public_access_block', result)
         return result['status'] == 'success'
     
+    # ============ BUCKET POLICY TESTS ============
+    
+    def test_put_bucket_policy(self):
+        """Test: Put bucket policy"""
+        print("\n[TEST] Applying bucket policy...")
+        result = self.s3_ops.put_bucket_policy(self.test_bucket)
+        self._log_result('put_bucket_policy', result)
+        return result['status'] == 'success'
+    
+    def test_get_bucket_policy(self):
+        """Test: Get bucket policy"""
+        print("\n[TEST] Getting bucket policy...")
+        result = self.s3_ops.get_bucket_policy(self.test_bucket)
+        self._log_result('get_bucket_policy', result)
+        return result['status'] == 'success'
+    
+    def test_delete_bucket_policy(self):
+        """Test: Delete bucket policy"""
+        print("\n[TEST] Deleting bucket policy...")
+        result = self.s3_ops.delete_bucket_policy(self.test_bucket)
+        self._log_result('delete_bucket_policy', result)
+        return result['status'] == 'success'
+    
     # ============ OBJECT LEVEL TESTS ============
     
     def test_get_object(self):
@@ -679,6 +702,11 @@ class S3TestSuite:
             self.test_put_public_access_block()
             self.test_get_public_access_block()
             
+            # Bucket Policy
+            self.test_put_bucket_policy()
+            self.test_get_bucket_policy()
+            self.test_delete_bucket_policy()
+            
             # Object Operations
             self.test_put_object()
             self.test_head_object()
@@ -768,6 +796,9 @@ class S3TestSuite:
             'suspend_bucket_versioning': self.test_suspend_bucket_versioning,
             'put_public_access_block': self.test_put_public_access_block,
             'get_public_access_block': self.test_get_public_access_block,
+            'put_bucket_policy': self.test_put_bucket_policy,
+            'get_bucket_policy': self.test_get_bucket_policy,
+            'delete_bucket_policy': self.test_delete_bucket_policy,
             # Object Level
             'put_object': self.test_put_object,
             'get_object': self.test_get_object,
