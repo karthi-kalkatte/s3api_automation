@@ -41,6 +41,9 @@ LARGE FILE OPERATIONS:
   - put_delete_5mb_immediate (Upload 5MB and delete immediately)
   - put_get_1kb_immediate (Upload 1KB and download immediately)
   - put_delete_1kb_immediate (Upload 1KB and delete immediately)
+  - put_object_50mb (Upload 50MB file)
+  - get_object_50mb_multipart (Download 50MB with 10MB parts)
+  - put_get_50mb_multipart_immediate (Upload 50MB and download immediately with 10MB parts)
 
 OBJECT LOCK OPERATIONS:
   - create_bucket_with_object_lock (Create bucket with WORM protection)

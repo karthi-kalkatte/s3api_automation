@@ -19,11 +19,12 @@ class S3TestSuite:
         self.test_object_lock_key = "test-object-lock-retention.txt"
         self.test_object_5mb = "test-object-5mb.bin"
         self.test_object_1kb = "test-object-1kb.bin"
+        self.test_object_50mb = "test-object-50mb.bin"
         self.test_file_path = None
         self.test_file_path2 = None
         self.test_file_path_5mb = None
         self.test_file_path_1kb = None
-        self.test_file_path_5mb = None
+        self.test_file_path_50mb = None
     
     def setup(self):
         """Setup test environment."""
@@ -50,11 +51,19 @@ class S3TestSuite:
             for _ in range(5):
                 f.write(chunk)
         
-        print(f"✓ Setup complete - Test files created (1KB and 5MB files)")
+        # Create 50MB test file
+        self.test_file_path_50mb = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        with open(self.test_file_path_50mb, 'wb') as f:
+            # Write 50MB of data (50 * 1024 * 1024 bytes)
+            chunk = b'X' * (1024 * 1024)  # 1MB chunk
+            for _ in range(50):
+                f.write(chunk)
+        
+        print(f"✓ Setup complete - Test files created (1KB, 5MB, and 50MB files)")
     
     def teardown(self):
         """Cleanup test environment."""
-        for file_path in [self.test_file_path, self.test_file_path2, self.test_file_path_5mb, self.test_file_path_1kb]:
+        for file_path in [self.test_file_path, self.test_file_path2, self.test_file_path_5mb, self.test_file_path_1kb, self.test_file_path_50mb]:
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
         print("✓ Cleanup complete - Test files removed")
@@ -443,6 +452,61 @@ class S3TestSuite:
         self._log_result('put_delete_1kb_immediate', delete_result)
         return delete_result['status'] == 'success'
     
+    # ============ MULTIPART DOWNLOAD TESTS (50MB) ============
+    
+    def test_put_object_50mb(self):
+        """Test: Upload 50MB object"""
+        print("\n[TEST] Uploading 50MB object...")
+        result = self.s3_ops.put_object_50mb(self.test_bucket, self.test_object_50mb, self.test_file_path_50mb)
+        self._log_result('put_object_50mb', result)
+        return result['status'] == 'success'
+    
+    def test_get_object_50mb_multipart(self):
+        """Test: Download 50MB object with multipart (10MB parts)"""
+        print("\n[TEST] Downloading 50MB object with multipart (10MB parts)...")
+        
+        # Upload first if needed
+        put_result = self.s3_ops.put_object_50mb(self.test_bucket, self.test_object_50mb, self.test_file_path_50mb)
+        if put_result['status'] != 'success':
+            self._log_result('get_object_50mb_multipart', put_result)
+            return False
+        
+        # Download with multipart
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        result = self.s3_ops.get_object_50mb_multipart(self.test_bucket, self.test_object_50mb, download_path, part_size=10*1024*1024)
+        self._log_result('get_object_50mb_multipart', result)
+        
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return result['status'] == 'success'
+    
+    def test_put_get_50mb_multipart_immediate(self):
+        """Test: Put 50MB object and download immediately with multipart"""
+        print("\n[TEST] Putting 50MB object and downloading immediately with multipart...")
+        
+        # Put object
+        put_result = self.s3_ops.put_object_50mb(self.test_bucket, self.test_object_50mb, self.test_file_path_50mb)
+        if put_result['status'] != 'success':
+            self._log_result('put_get_50mb_multipart_immediate', put_result)
+            return False
+        
+        print("  └─ Object uploaded, downloading immediately with 10MB parts...")
+        
+        # Download with multipart immediately
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        get_result = self.s3_ops.get_object_50mb_multipart(self.test_bucket, self.test_object_50mb, download_path, part_size=10*1024*1024)
+        
+        if get_result['status'] == 'success':
+            get_result['message'] = f'Put and Get 50MB with multipart successful! Downloaded in {get_result["parts_downloaded"]} parts ({get_result["part_size_mb"]:.1f}MB each)'
+        
+        self._log_result('put_get_50mb_multipart_immediate', get_result)
+        
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
     # ============ OBJECT LOCK TESTS ============
     
     def test_create_bucket_with_object_lock(self):
@@ -643,6 +707,11 @@ class S3TestSuite:
             self.test_put_get_1kb_immediate()
             self.test_put_delete_1kb_immediate()
             
+            # Multipart Download Operations (50MB)
+            self.test_put_object_50mb()
+            self.test_get_object_50mb_multipart()
+            self.test_put_get_50mb_multipart_immediate()
+            
             # SSE (Server-Side Encryption) Operations
             self.test_put_bucket_encryption()
             self.test_get_bucket_encryption()
@@ -722,6 +791,10 @@ class S3TestSuite:
             'put_delete_5mb_immediate': self.test_put_delete_5mb_immediate,
             'put_get_1kb_immediate': self.test_put_get_1kb_immediate,
             'put_delete_1kb_immediate': self.test_put_delete_1kb_immediate,
+            # Multipart Download Operations (50MB)
+            'put_object_50mb': self.test_put_object_50mb,
+            'get_object_50mb_multipart': self.test_get_object_50mb_multipart,
+            'put_get_50mb_multipart_immediate': self.test_put_get_50mb_multipart_immediate,
             # Object Lock Operations
             'create_bucket_with_object_lock': self.test_create_bucket_with_object_lock,
             'get_object_lock_configuration': self.test_get_object_lock_configuration,

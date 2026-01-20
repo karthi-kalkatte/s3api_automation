@@ -715,3 +715,65 @@ class S3Operations:
             return {'status': 'error', 'message': str(e)}
         except Exception as e:
             return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    # ============ LARGE FILE MULTIPART DOWNLOAD OPERATIONS ============
+    
+    def put_object_50mb(self, bucket_name: str, object_key: str, file_path: str) -> dict:
+        """Upload a 50MB object."""
+        try:
+            with open(file_path, 'rb') as f:
+                self.s3_client.put_object(Bucket=bucket_name, Key=object_key, Body=f)
+            return {'status': 'success', 'message': f'Object {object_key} (50MB) uploaded successfully'}
+        except FileNotFoundError:
+            return {'status': 'error', 'message': f'File not found: {file_path}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def get_object_50mb_multipart(self, bucket_name: str, object_key: str, file_path: str = None, part_size: int = 10 * 1024 * 1024) -> dict:
+        """Download a 50MB object in multipart (default 10MB parts)."""
+        try:
+            # Get object metadata to determine size
+            head_response = self.s3_client.head_object(Bucket=bucket_name, Key=object_key)
+            total_size = head_response['ContentLength']
+            
+            # Download in parts
+            downloaded_size = 0
+            parts_downloaded = 0
+            
+            if file_path:
+                with open(file_path, 'wb') as f:
+                    for start_byte in range(0, total_size, part_size):
+                        end_byte = min(start_byte + part_size - 1, total_size - 1)
+                        range_header = f'bytes={start_byte}-{end_byte}'
+                        
+                        response = self.s3_client.get_object(Bucket=bucket_name, Key=object_key, Range=range_header)
+                        part_data = response['Body'].read()
+                        f.write(part_data)
+                        
+                        downloaded_size += len(part_data)
+                        parts_downloaded += 1
+            else:
+                for start_byte in range(0, total_size, part_size):
+                    end_byte = min(start_byte + part_size - 1, total_size - 1)
+                    range_header = f'bytes={start_byte}-{end_byte}'
+                    
+                    response = self.s3_client.get_object(Bucket=bucket_name, Key=object_key, Range=range_header)
+                    part_data = response['Body'].read()
+                    
+                    downloaded_size += len(part_data)
+                    parts_downloaded += 1
+            
+            size_mb = total_size / (1024 * 1024)
+            return {
+                'status': 'success',
+                'total_size': total_size,
+                'parts_downloaded': parts_downloaded,
+                'part_size_mb': part_size / (1024 * 1024),
+                'message': f'Downloaded 50MB object in {parts_downloaded} parts ({size_mb:.2f} MB total)'
+            }
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
