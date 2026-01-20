@@ -50,6 +50,18 @@ OBJECT LOCK OPERATIONS:
   - get_object_retention (Get object retention status)
   - put_object_legal_hold (Place legal hold on object)
   - get_object_legal_hold (Get legal hold status)
+
+SSE (SERVER-SIDE ENCRYPTION) OPERATIONS:
+  - put_bucket_encryption (Enable AES256 encryption on bucket)
+  - get_bucket_encryption (Get bucket encryption configuration)
+  - put_object_with_sse (Upload object with encryption)
+  - get_object_with_sse (Download encrypted object)
+  - delete_bucket_encryption (Remove bucket encryption)
+
+LIFECYCLE RULES OPERATIONS:
+  - put_bucket_lifecycle_configuration (Set lifecycle rules)
+  - get_bucket_lifecycle_configuration (Get lifecycle rules)
+  - delete_bucket_lifecycle_configuration (Delete lifecycle rules)
         """
     )
     

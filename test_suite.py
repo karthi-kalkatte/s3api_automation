@@ -648,10 +648,12 @@ class S3TestSuite:
             self.test_get_bucket_encryption()
             self.test_put_object_with_sse()
             self.test_get_object_with_sse()
+            self.test_delete_bucket_encryption()
             
             # Lifecycle Rules Operations
             self.test_put_bucket_lifecycle_configuration()
             self.test_get_bucket_lifecycle_configuration()
+            self.test_delete_bucket_lifecycle_configuration()
             
             # Object Lock Operations (requires separate bucket)
             self.test_create_bucket_with_object_lock()
