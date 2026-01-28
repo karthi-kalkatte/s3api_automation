@@ -6,6 +6,35 @@ from config import S3Config
 
 class S3Operations:
     """Handle S3 API operations."""
+
+    def put_object_with_conditions(self, bucket_name: str, object_key: str, file_path: str, if_match: str = None, if_none_match: str = None) -> dict:
+        """Conditionally upload an object to S3 by checking ETag before upload."""
+        try:
+            # Get current ETag
+            try:
+                meta = self.s3_client.head_object(Bucket=bucket_name, Key=object_key)
+                current_etag = meta['ETag'].strip('"')
+            except Exception:
+                current_etag = None
+
+            # If-Match: Only upload if ETag matches
+            if if_match is not None:
+                if current_etag != if_match:
+                    return {'status': 'error', 'message': f'ETag does not match. Current: {current_etag}, Expected: {if_match}'}
+            # If-None-Match: Only upload if ETag does NOT match
+            if if_none_match is not None:
+                if current_etag == if_none_match:
+                    return {'status': 'error', 'message': f'ETag matches (object already exists with same ETag): {current_etag}'}
+
+            with open(file_path, 'rb') as f:
+                self.s3_client.put_object(Bucket=bucket_name, Key=object_key, Body=f)
+            return {'status': 'success', 'message': f'Object {object_key} uploaded successfully (conditional logic applied)'}
+        except FileNotFoundError:
+            return {'status': 'error', 'message': f'File not found: {file_path}'}
+        except ClientError as e:
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
     
     def __init__(self, config: S3Config):
         self.config = config

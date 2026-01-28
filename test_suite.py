@@ -4,11 +4,72 @@ import tempfile
 from config import S3Config
 from s3_operations import S3Operations
 
-
 class S3TestSuite:
     """Test cases for S3 API operations."""
-    
+
     def __init__(self):
+        self.config = S3Config()
+        self.s3_ops = S3Operations(self.config)
+        self.test_results = []
+        self.test_bucket = f"test-bucket-{os.urandom(4).hex()}"
+        self.test_bucket_lock = f"test-bucket-lock-{os.urandom(4).hex()}"
+        self.test_object_key = "test-object.txt"
+        self.test_object_key2 = "test-object-copy.txt"
+        self.test_object_lock_key = "test-object-lock-retention.txt"
+        self.test_object_5mb = "test-object-5mb.bin"
+        self.test_object_1kb = "test-object-1kb.bin"
+        self.test_object_50mb = "test-object-50mb.bin"
+        self.test_file_path = None
+        self.test_file_path2 = None
+        self.test_file_path_5mb = None
+        self.test_file_path_1kb = None
+        self.test_file_path_50mb = None
+
+    # ...existing code...
+
+    def test_put_object_tagging(self):
+        """Test: Put object tagging"""
+        print("\n[TEST] Adding object tags...")
+        tags = {'Version': '1.0', 'Type': 'Test'}
+        result = self.s3_ops.put_object_tagging(self.test_bucket, self.test_object_key, tags)
+        self._log_result('put_object_tagging', result)
+        return result['status'] == 'success'
+
+    def test_put_object_if_match(self):
+        """Test: Put object with If-Match (simulate conditional put by ETag check)"""
+        print("\n[TEST] Putting object with If-Match...")
+        # Upload object first
+        self.s3_ops.put_object(self.test_bucket, self.test_object_key, self.test_file_path)
+        # Get ETag
+        meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
+        etag = meta['ETag'].strip('"')
+        # Try to upload with If-Match (should succeed)
+        result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, self.test_file_path, if_match=etag)
+        self._log_result('put_object_if_match', result)
+        return result['status'] == 'success'
+
+    def test_put_object_if_not_match(self):
+        """Test: Put object with If-None-Match (simulate conditional put by ETag check)"""
+        print("\n[TEST] Putting object with If-None-Match...")
+        # Upload object first
+        self.s3_ops.put_object(self.test_bucket, self.test_object_key, self.test_file_path)
+        # Get ETag
+        meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
+        etag = meta['ETag'].strip('"')
+        # Try to upload with If-None-Match (should NOT overwrite, so 'error' is expected and is a success for this test)
+        result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, self.test_file_path, if_none_match=etag)
+        # Treat ETag match prevention as a success
+        if result['status'] == 'error' and 'ETag matches' in result.get('message', ''):
+            result['status'] = 'success'
+        self._log_result('put_object_if_not_match', result)
+        return result['status'] == 'success'
+
+    def test_get_object_tagging(self):
+        """Test: Get object tagging"""
+        print("\n[TEST] Getting object tags...")
+        result = self.s3_ops.get_object_tagging(self.test_bucket, self.test_object_key)
+        self._log_result('get_object_tagging', result)
+        return result['status'] == 'success'
         self.config = S3Config()
         self.s3_ops = S3Operations(self.config)
         self.test_results = []
@@ -815,6 +876,8 @@ class S3TestSuite:
             'delete_object_tagging': self.test_delete_object_tagging,
             'initiate_multipart_upload': self.test_initiate_multipart_upload,
             'list_multipart_uploads': self.test_list_multipart_uploads,
+            'put_object_if_match': self.test_put_object_if_match,
+            'put_object_if_not_match': self.test_put_object_if_not_match,
             # Large File Operations
             'put_object_5mb': self.test_put_object_5mb,
             'get_object_5mb': self.test_get_object_5mb,

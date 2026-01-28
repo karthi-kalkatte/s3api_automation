@@ -14,6 +14,8 @@ Examples:
   python main.py --test create_bucket               # Run specific test
   python main.py --test put_bucket_tagging          # Run put_bucket_tagging test
   python main.py --test put_object                  # Run put_object test
+  python main.py --test put_object_if_match         # Run put_object_if_match test (Conditional ETag match)
+  python main.py --test put_object_if_not_match     # Run put_object_if_not_match test (Conditional ETag not match)
   python main.py --test copy_object                 # Run copy_object test
   python main.py --test put_get_5mb_immediate       # Put 5MB and get immediately
 
@@ -29,6 +31,8 @@ BUCKET LEVEL OPERATIONS:
 
 OBJECT LEVEL OPERATIONS:
   - put_object, get_object, head_object, delete_object, delete_objects
+  - put_object_if_match (Put only if ETag matches)
+  - put_object_if_not_match (Put only if ETag does not match)
   - copy_object
   - list_objects, list_object_versions
   - put_object_acl, get_object_acl
