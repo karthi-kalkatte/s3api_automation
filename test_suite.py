@@ -766,6 +766,10 @@ class S3TestSuite:
             self.test_put_object_acl()
             self.test_get_object_acl()
             
+            # Conditional PUT Operations
+            self.test_put_object_if_match()
+            self.test_put_object_if_not_match()
+            
             # Copy and Multipart
             self.test_copy_object()
             self.test_initiate_multipart_upload()
