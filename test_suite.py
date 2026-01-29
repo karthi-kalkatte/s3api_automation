@@ -70,22 +70,6 @@ class S3TestSuite:
         result = self.s3_ops.get_object_tagging(self.test_bucket, self.test_object_key)
         self._log_result('get_object_tagging', result)
         return result['status'] == 'success'
-        self.config = S3Config()
-        self.s3_ops = S3Operations(self.config)
-        self.test_results = []
-        self.test_bucket = f"test-bucket-{os.urandom(4).hex()}"
-        self.test_bucket_lock = f"test-bucket-lock-{os.urandom(4).hex()}"
-        self.test_object_key = "test-object.txt"
-        self.test_object_key2 = "test-object-copy.txt"
-        self.test_object_lock_key = "test-object-lock-retention.txt"
-        self.test_object_5mb = "test-object-5mb.bin"
-        self.test_object_1kb = "test-object-1kb.bin"
-        self.test_object_50mb = "test-object-50mb.bin"
-        self.test_file_path = None
-        self.test_file_path2 = None
-        self.test_file_path_5mb = None
-        self.test_file_path_1kb = None
-        self.test_file_path_50mb = None
     
     def setup(self):
         """Setup test environment."""
