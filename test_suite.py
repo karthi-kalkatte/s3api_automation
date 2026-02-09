@@ -38,15 +38,83 @@ class S3TestSuite:
     def test_put_object_if_match(self):
         """Test: Put object with If-Match (simulate conditional put by ETag check)"""
         print("\n[TEST] Putting object with If-Match...")
-        # Upload object first
-        self.s3_ops.put_object(self.test_bucket, self.test_object_key, self.test_file_path)
-        # Get ETag
-        meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
-        etag = meta['ETag'].strip('"')
-        # Try to upload with If-Match (should succeed)
-        result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, self.test_file_path, if_match=etag)
-        self._log_result('put_object_if_match', result)
-        return result['status'] == 'success'
+        
+        # Create a temporary file with content "a"
+        temp_file_a = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        with open(temp_file_a, 'w') as f:
+            f.write('a')
+        
+        try:
+            # Upload object with content "a" first
+            print("  └─ Uploading object with content 'a'...")
+            result_upload = self.s3_ops.put_object(self.test_bucket, self.test_object_key, temp_file_a)
+            if result_upload['status'] != 'success':
+                return False
+                
+            # Get ETag of the uploaded object
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
+            original_etag = meta['ETag'].strip('"')
+            print(f"  └─ Original ETag: {original_etag}")
+            
+            # Create another file with different content 
+            temp_file_b = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+            with open(temp_file_b, 'w') as f:
+                f.write('b')  # Different content
+            
+            try:
+                # Try to upload with If-Match using the original ETag (should succeed since ETag matches)
+                print("  └─ Attempting PUT with If-Match condition...")
+                result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, temp_file_b, if_match=original_etag)
+                self._log_result('put_object_if_match', result)
+                return result['status'] == 'success'
+            finally:
+                # Clean up second temp file
+                if os.path.exists(temp_file_b):
+                    os.remove(temp_file_b)
+        finally:
+            # Clean up first temp file
+            if os.path.exists(temp_file_a):
+                os.remove(temp_file_a)
+
+    def test_put_object_if_match_fails(self):
+        """Test: Put object with If-Match fails when ETag doesn't match"""
+        print("\n[TEST] Putting object with If-Match (should fail with wrong ETag)...")
+        
+        # Create and upload initial file
+        temp_file_a = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        with open(temp_file_a, 'w') as f:
+            f.write('initial content')
+        
+        try:
+            # Upload initial object
+            result_upload = self.s3_ops.put_object(self.test_bucket, self.test_object_key, temp_file_a)
+            if result_upload['status'] != 'success':
+                return False
+            
+            # Create another file with different content 
+            temp_file_b = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+            with open(temp_file_b, 'w') as f:
+                f.write('modified content')
+            
+            try:
+                # Try to upload with wrong/fake ETag (should fail with 412)
+                fake_etag = "wrong-etag-12345"
+                print(f"  └─ Attempting PUT with wrong ETag: {fake_etag}")
+                result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, temp_file_b, if_match=fake_etag)
+                
+                # For If-Match failure test, 'error' status with 412/precondition failed is the expected success
+                if result['status'] == 'error' and ('412' in result.get('message', '') or 'PreconditionFailed' in result.get('message', '') or 'does not match' in result.get('message', '')):
+                    result['status'] = 'success'
+                    result['message'] = f"✓ If-Match correctly failed with wrong ETag: {result.get('message', '')}"
+                
+                self._log_result('put_object_if_match_fails', result)
+                return result['status'] == 'success'
+            finally:
+                if os.path.exists(temp_file_b):
+                    os.remove(temp_file_b)
+        finally:
+            if os.path.exists(temp_file_a):
+                os.remove(temp_file_a)
 
     def test_put_object_if_not_match(self):
         """Test: Put object with If-None-Match (simulate conditional put by ETag check)"""
@@ -768,6 +836,7 @@ class S3TestSuite:
             
             # Conditional PUT Operations
             self.test_put_object_if_match()
+            self.test_put_object_if_match_fails()
             self.test_put_object_if_not_match()
             
             # Copy and Multipart
@@ -865,6 +934,7 @@ class S3TestSuite:
             'initiate_multipart_upload': self.test_initiate_multipart_upload,
             'list_multipart_uploads': self.test_list_multipart_uploads,
             'put_object_if_match': self.test_put_object_if_match,
+            'put_object_if_match_fails': self.test_put_object_if_match_fails,
             'put_object_if_not_match': self.test_put_object_if_not_match,
             # Large File Operations
             'put_object_5mb': self.test_put_object_5mb,
@@ -912,7 +982,8 @@ class S3TestSuite:
                 if key in ['put_object', 'get_object', 'head_object', 'copy_object', 'delete_object',
                            'delete_objects', 'list_objects', 'list_object_versions', 'put_object_acl',
                            'get_object_acl', 'put_object_tagging', 'get_object_tagging', 'delete_object_tagging',
-                           'initiate_multipart_upload', 'list_multipart_uploads']:
+                           'initiate_multipart_upload', 'list_multipart_uploads', 'put_object_if_match',
+                           'put_object_if_match_fails', 'put_object_if_not_match']:
                     print(f"  - {key}")
             return
         
@@ -929,7 +1000,7 @@ class S3TestSuite:
             
             if test_name in ['put_object', 'head_object', 'get_object', 'copy_object', 'delete_object',
                            'list_objects', 'put_object_acl', 'get_object_acl', 'put_object_tagging',
-                           'get_object_tagging', 'delete_object_tagging', 'delete_objects']:
+                           'get_object_tagging', 'delete_object_tagging', 'delete_objects', 'put_object_if_match_fails']:
                 self.test_put_object()
             
             if test_name in ['copy_object', 'delete_objects']:
@@ -946,7 +1017,7 @@ class S3TestSuite:
                 try:
                     if test_name in ['put_object', 'copy_object']:
                         self.test_delete_objects()
-                    elif test_name in ['head_object', 'get_object', 'list_objects']:
+                    elif test_name in ['head_object', 'get_object', 'list_objects', 'put_object_if_match', 'put_object_if_match_fails', 'put_object_if_not_match']:
                         self.test_delete_object()
                 except:
                     pass
