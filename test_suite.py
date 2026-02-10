@@ -38,15 +38,83 @@ class S3TestSuite:
     def test_put_object_if_match(self):
         """Test: Put object with If-Match (simulate conditional put by ETag check)"""
         print("\n[TEST] Putting object with If-Match...")
-        # Upload object first
-        self.s3_ops.put_object(self.test_bucket, self.test_object_key, self.test_file_path)
-        # Get ETag
-        meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
-        etag = meta['ETag'].strip('"')
-        # Try to upload with If-Match (should succeed)
-        result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, self.test_file_path, if_match=etag)
-        self._log_result('put_object_if_match', result)
-        return result['status'] == 'success'
+        
+        # Create a temporary file with content "a"
+        temp_file_a = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        with open(temp_file_a, 'w') as f:
+            f.write('a')
+        
+        try:
+            # Upload object with content "a" first
+            print("  └─ Uploading object with content 'a'...")
+            result_upload = self.s3_ops.put_object(self.test_bucket, self.test_object_key, temp_file_a)
+            if result_upload['status'] != 'success':
+                return False
+                
+            # Get ETag of the uploaded object
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
+            original_etag = meta['ETag'].strip('"')
+            print(f"  └─ Original ETag: {original_etag}")
+            
+            # Create another file with different content 
+            temp_file_b = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+            with open(temp_file_b, 'w') as f:
+                f.write('b')  # Different content
+            
+            try:
+                # Try to upload with If-Match using the original ETag (should succeed since ETag matches)
+                print("  └─ Attempting PUT with If-Match condition...")
+                result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, temp_file_b, if_match=original_etag)
+                self._log_result('put_object_if_match', result)
+                return result['status'] == 'success'
+            finally:
+                # Clean up second temp file
+                if os.path.exists(temp_file_b):
+                    os.remove(temp_file_b)
+        finally:
+            # Clean up first temp file
+            if os.path.exists(temp_file_a):
+                os.remove(temp_file_a)
+
+    def test_put_object_if_match_fails(self):
+        """Test: Put object with If-Match fails when ETag doesn't match"""
+        print("\n[TEST] Putting object with If-Match (should fail with wrong ETag)...")
+        
+        # Create and upload initial file
+        temp_file_a = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        with open(temp_file_a, 'w') as f:
+            f.write('initial content')
+        
+        try:
+            # Upload initial object
+            result_upload = self.s3_ops.put_object(self.test_bucket, self.test_object_key, temp_file_a)
+            if result_upload['status'] != 'success':
+                return False
+            
+            # Create another file with different content 
+            temp_file_b = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+            with open(temp_file_b, 'w') as f:
+                f.write('modified content')
+            
+            try:
+                # Try to upload with wrong/fake ETag (should fail with 412)
+                fake_etag = "wrong-etag-12345"
+                print(f"  └─ Attempting PUT with wrong ETag: {fake_etag}")
+                result = self.s3_ops.put_object_with_conditions(self.test_bucket, self.test_object_key, temp_file_b, if_match=fake_etag)
+                
+                # For If-Match failure test, 'error' status with 412/precondition failed is the expected success
+                if result['status'] == 'error' and ('412' in result.get('message', '') or 'PreconditionFailed' in result.get('message', '') or 'does not match' in result.get('message', '')):
+                    result['status'] = 'success'
+                    result['message'] = f"✓ If-Match correctly failed with wrong ETag: {result.get('message', '')}"
+                
+                self._log_result('put_object_if_match_fails', result)
+                return result['status'] == 'success'
+            finally:
+                if os.path.exists(temp_file_b):
+                    os.remove(temp_file_b)
+        finally:
+            if os.path.exists(temp_file_a):
+                os.remove(temp_file_a)
 
     def test_put_object_if_not_match(self):
         """Test: Put object with If-None-Match (simulate conditional put by ETag check)"""
@@ -70,22 +138,6 @@ class S3TestSuite:
         result = self.s3_ops.get_object_tagging(self.test_bucket, self.test_object_key)
         self._log_result('get_object_tagging', result)
         return result['status'] == 'success'
-        self.config = S3Config()
-        self.s3_ops = S3Operations(self.config)
-        self.test_results = []
-        self.test_bucket = f"test-bucket-{os.urandom(4).hex()}"
-        self.test_bucket_lock = f"test-bucket-lock-{os.urandom(4).hex()}"
-        self.test_object_key = "test-object.txt"
-        self.test_object_key2 = "test-object-copy.txt"
-        self.test_object_lock_key = "test-object-lock-retention.txt"
-        self.test_object_5mb = "test-object-5mb.bin"
-        self.test_object_1kb = "test-object-1kb.bin"
-        self.test_object_50mb = "test-object-50mb.bin"
-        self.test_file_path = None
-        self.test_file_path2 = None
-        self.test_file_path_5mb = None
-        self.test_file_path_1kb = None
-        self.test_file_path_50mb = None
     
     def setup(self):
         """Setup test environment."""
@@ -689,6 +741,139 @@ class S3TestSuite:
         self._log_result('delete_bucket_encryption', result)
         return result['status'] == 'success'
     
+    def test_put_object_sse_bucket_single_part(self):
+        """Test: Put single part object on SSE encryption enabled bucket"""
+        print("\n[TEST] Single part upload on SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('put_object_sse_bucket_single_part', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, uploading single part object...")
+        
+        # Upload object (should inherit bucket encryption)
+        put_result = self.s3_ops.put_object(self.test_bucket, 'sse-bucket-single.txt', self.test_file_path)
+        
+        if put_result['status'] == 'success':
+            put_result['message'] = f'Single part upload on SSE bucket successful! Object: sse-bucket-single.txt'
+            put_result['encryption_inherited'] = True
+        
+        self._log_result('put_object_sse_bucket_single_part', put_result)
+        return put_result['status'] == 'success'
+    
+    def test_put_object_sse_bucket_multipart(self):
+        """Test: Put multipart object on SSE encryption enabled bucket"""
+        print("\n[TEST] Multipart upload on SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('put_object_sse_bucket_multipart', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, uploading 50MB object with multipart...")
+        
+        # Upload 50MB object using multipart (should inherit bucket encryption)
+        put_result = self.s3_ops.put_object_50mb(self.test_bucket, 'sse-bucket-multipart.bin', self.test_file_path_50mb)
+        
+        if put_result['status'] == 'success':
+            put_result['message'] = f'Multipart upload on SSE bucket successful! Object: sse-bucket-multipart.bin (50MB)'
+            put_result['encryption_inherited'] = True
+        
+        self._log_result('put_object_sse_bucket_multipart', put_result)
+        return put_result['status'] == 'success'
+    
+    def test_get_object_sse_bucket_single_part(self):
+        """Test: Get single part object from SSE encryption enabled bucket"""
+        print("\n[TEST] Single part download from SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('get_object_sse_bucket_single_part', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, downloading single part object...")
+        
+        # Download single part object (assumes sse-bucket-single.txt exists)
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.txt').name
+        get_result = self.s3_ops.get_object(self.test_bucket, 'sse-bucket-single.txt', download_path)
+        
+        if get_result['status'] == 'success':
+            downloaded_size = os.path.getsize(download_path)
+            get_result['message'] = f'Single part download from SSE bucket successful! Size: {downloaded_size} bytes'
+            get_result['encryption_enabled'] = True
+        
+        self._log_result('get_object_sse_bucket_single_part', get_result)
+        
+        # Cleanup
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
+    def test_get_object_sse_bucket_multipart(self):
+        """Test: Get multipart object from SSE encryption enabled bucket"""
+        print("\n[TEST] Downloading multipart object from SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('get_object_sse_bucket_multipart', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, downloading multipart object (50MB)...")
+        
+        # Download multipart object (assumes sse-bucket-multipart.bin exists)
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        get_result = self.s3_ops.get_object(self.test_bucket, 'sse-bucket-multipart.bin', download_path)
+        
+        if get_result['status'] == 'success':
+            downloaded_size = os.path.getsize(download_path)
+            get_result['message'] = f'Multipart object download from SSE bucket successful! Size: {downloaded_size / (1024*1024):.2f} MB'
+            get_result['encryption_enabled'] = True
+            get_result['downloaded_size'] = downloaded_size
+        
+        self._log_result('get_object_sse_bucket_multipart', get_result)
+        
+        # Cleanup
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
+    def test_get_object_multipart_sse_bucket(self):
+        """Test: Get object as multipart download from SSE encryption enabled bucket"""
+        print("\n[TEST] Multipart download from SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('get_object_multipart_sse_bucket', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, downloading object with multipart (10MB parts)...")
+        
+        # Download with multipart (assumes sse-bucket-multipart.bin exists)
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        get_result = self.s3_ops.get_object_50mb_multipart(self.test_bucket, 'sse-bucket-multipart.bin', download_path, part_size=10*1024*1024)
+        
+        if get_result['status'] == 'success':
+            downloaded_size = os.path.getsize(download_path)
+            get_result['message'] = f'Multipart download from SSE bucket successful! Size: {downloaded_size / (1024*1024):.2f} MB in {get_result.get("parts_downloaded", "N/A")} parts'
+            get_result['encryption_enabled'] = True
+            get_result['downloaded_size'] = downloaded_size
+        
+        self._log_result('get_object_multipart_sse_bucket', get_result)
+        
+        # Cleanup
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
     # ============ LIFECYCLE RULES TESTS ============
     
     def test_put_bucket_lifecycle_configuration(self):
@@ -782,6 +967,11 @@ class S3TestSuite:
             self.test_put_object_acl()
             self.test_get_object_acl()
             
+            # Conditional PUT Operations
+            self.test_put_object_if_match()
+            self.test_put_object_if_match_fails()
+            self.test_put_object_if_not_match()
+            
             # Copy and Multipart
             self.test_copy_object()
             self.test_initiate_multipart_upload()
@@ -806,6 +996,14 @@ class S3TestSuite:
             self.test_get_bucket_encryption()
             self.test_put_object_with_sse()
             self.test_get_object_with_sse()
+            
+            # SSE Bucket-level Encryption Tests
+            self.test_put_object_sse_bucket_single_part()
+            self.test_put_object_sse_bucket_multipart()
+            self.test_get_object_sse_bucket_single_part()
+            self.test_get_object_sse_bucket_multipart()
+            self.test_get_object_multipart_sse_bucket()
+            
             self.test_delete_bucket_encryption()
             
             # Lifecycle Rules Operations
@@ -877,6 +1075,7 @@ class S3TestSuite:
             'initiate_multipart_upload': self.test_initiate_multipart_upload,
             'list_multipart_uploads': self.test_list_multipart_uploads,
             'put_object_if_match': self.test_put_object_if_match,
+            'put_object_if_match_fails': self.test_put_object_if_match_fails,
             'put_object_if_not_match': self.test_put_object_if_not_match,
             # Large File Operations
             'put_object_5mb': self.test_put_object_5mb,
@@ -903,6 +1102,11 @@ class S3TestSuite:
             'put_object_with_sse': self.test_put_object_with_sse,
             'get_object_with_sse': self.test_get_object_with_sse,
             'delete_bucket_encryption': self.test_delete_bucket_encryption,
+            'put_object_sse_bucket_single_part': self.test_put_object_sse_bucket_single_part,
+            'put_object_sse_bucket_multipart': self.test_put_object_sse_bucket_multipart,
+            'get_object_sse_bucket_single_part': self.test_get_object_sse_bucket_single_part,
+            'get_object_sse_bucket_multipart': self.test_get_object_sse_bucket_multipart,
+            'get_object_multipart_sse_bucket': self.test_get_object_multipart_sse_bucket,
             # Lifecycle Rules Operations
             'put_bucket_lifecycle_configuration': self.test_put_bucket_lifecycle_configuration,
             'get_bucket_lifecycle_configuration': self.test_get_bucket_lifecycle_configuration,
@@ -924,7 +1128,8 @@ class S3TestSuite:
                 if key in ['put_object', 'get_object', 'head_object', 'copy_object', 'delete_object',
                            'delete_objects', 'list_objects', 'list_object_versions', 'put_object_acl',
                            'get_object_acl', 'put_object_tagging', 'get_object_tagging', 'delete_object_tagging',
-                           'initiate_multipart_upload', 'list_multipart_uploads']:
+                           'initiate_multipart_upload', 'list_multipart_uploads', 'put_object_if_match',
+                           'put_object_if_match_fails', 'put_object_if_not_match']:
                     print(f"  - {key}")
             return
         
@@ -941,7 +1146,7 @@ class S3TestSuite:
             
             if test_name in ['put_object', 'head_object', 'get_object', 'copy_object', 'delete_object',
                            'list_objects', 'put_object_acl', 'get_object_acl', 'put_object_tagging',
-                           'get_object_tagging', 'delete_object_tagging', 'delete_objects']:
+                           'get_object_tagging', 'delete_object_tagging', 'delete_objects', 'put_object_if_match_fails']:
                 self.test_put_object()
             
             if test_name in ['copy_object', 'delete_objects']:
@@ -958,7 +1163,7 @@ class S3TestSuite:
                 try:
                     if test_name in ['put_object', 'copy_object']:
                         self.test_delete_objects()
-                    elif test_name in ['head_object', 'get_object', 'list_objects']:
+                    elif test_name in ['head_object', 'get_object', 'list_objects', 'put_object_if_match', 'put_object_if_match_fails', 'put_object_if_not_match']:
                         self.test_delete_object()
                 except:
                     pass
