@@ -741,6 +741,139 @@ class S3TestSuite:
         self._log_result('delete_bucket_encryption', result)
         return result['status'] == 'success'
     
+    def test_put_object_sse_bucket_single_part(self):
+        """Test: Put single part object on SSE encryption enabled bucket"""
+        print("\n[TEST] Single part upload on SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('put_object_sse_bucket_single_part', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, uploading single part object...")
+        
+        # Upload object (should inherit bucket encryption)
+        put_result = self.s3_ops.put_object(self.test_bucket, 'sse-bucket-single.txt', self.test_file_path)
+        
+        if put_result['status'] == 'success':
+            put_result['message'] = f'Single part upload on SSE bucket successful! Object: sse-bucket-single.txt'
+            put_result['encryption_inherited'] = True
+        
+        self._log_result('put_object_sse_bucket_single_part', put_result)
+        return put_result['status'] == 'success'
+    
+    def test_put_object_sse_bucket_multipart(self):
+        """Test: Put multipart object on SSE encryption enabled bucket"""
+        print("\n[TEST] Multipart upload on SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('put_object_sse_bucket_multipart', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, uploading 50MB object with multipart...")
+        
+        # Upload 50MB object using multipart (should inherit bucket encryption)
+        put_result = self.s3_ops.put_object_50mb(self.test_bucket, 'sse-bucket-multipart.bin', self.test_file_path_50mb)
+        
+        if put_result['status'] == 'success':
+            put_result['message'] = f'Multipart upload on SSE bucket successful! Object: sse-bucket-multipart.bin (50MB)'
+            put_result['encryption_inherited'] = True
+        
+        self._log_result('put_object_sse_bucket_multipart', put_result)
+        return put_result['status'] == 'success'
+    
+    def test_get_object_sse_bucket_single_part(self):
+        """Test: Get single part object from SSE encryption enabled bucket"""
+        print("\n[TEST] Single part download from SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('get_object_sse_bucket_single_part', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, downloading single part object...")
+        
+        # Download single part object (assumes sse-bucket-single.txt exists)
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.txt').name
+        get_result = self.s3_ops.get_object(self.test_bucket, 'sse-bucket-single.txt', download_path)
+        
+        if get_result['status'] == 'success':
+            downloaded_size = os.path.getsize(download_path)
+            get_result['message'] = f'Single part download from SSE bucket successful! Size: {downloaded_size} bytes'
+            get_result['encryption_enabled'] = True
+        
+        self._log_result('get_object_sse_bucket_single_part', get_result)
+        
+        # Cleanup
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
+    def test_get_object_sse_bucket_multipart(self):
+        """Test: Get multipart object from SSE encryption enabled bucket"""
+        print("\n[TEST] Downloading multipart object from SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('get_object_sse_bucket_multipart', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, downloading multipart object (50MB)...")
+        
+        # Download multipart object (assumes sse-bucket-multipart.bin exists)
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        get_result = self.s3_ops.get_object(self.test_bucket, 'sse-bucket-multipart.bin', download_path)
+        
+        if get_result['status'] == 'success':
+            downloaded_size = os.path.getsize(download_path)
+            get_result['message'] = f'Multipart object download from SSE bucket successful! Size: {downloaded_size / (1024*1024):.2f} MB'
+            get_result['encryption_enabled'] = True
+            get_result['downloaded_size'] = downloaded_size
+        
+        self._log_result('get_object_sse_bucket_multipart', get_result)
+        
+        # Cleanup
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
+    def test_get_object_multipart_sse_bucket(self):
+        """Test: Get object as multipart download from SSE encryption enabled bucket"""
+        print("\n[TEST] Multipart download from SSE enabled bucket...")
+        
+        # Enable bucket encryption first
+        encrypt_result = self.s3_ops.put_bucket_encryption(self.test_bucket, sse_algorithm='AES256')
+        if encrypt_result['status'] != 'success':
+            self._log_result('get_object_multipart_sse_bucket', encrypt_result)
+            return False
+        
+        print("  └─ Bucket encryption enabled, downloading object with multipart (10MB parts)...")
+        
+        # Download with multipart (assumes sse-bucket-multipart.bin exists)
+        download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        get_result = self.s3_ops.get_object_50mb_multipart(self.test_bucket, 'sse-bucket-multipart.bin', download_path, part_size=10*1024*1024)
+        
+        if get_result['status'] == 'success':
+            downloaded_size = os.path.getsize(download_path)
+            get_result['message'] = f'Multipart download from SSE bucket successful! Size: {downloaded_size / (1024*1024):.2f} MB in {get_result.get("parts_downloaded", "N/A")} parts'
+            get_result['encryption_enabled'] = True
+            get_result['downloaded_size'] = downloaded_size
+        
+        self._log_result('get_object_multipart_sse_bucket', get_result)
+        
+        # Cleanup
+        if os.path.exists(download_path):
+            os.remove(download_path)
+        
+        return get_result['status'] == 'success'
+    
     # ============ LIFECYCLE RULES TESTS ============
     
     def test_put_bucket_lifecycle_configuration(self):
@@ -863,6 +996,14 @@ class S3TestSuite:
             self.test_get_bucket_encryption()
             self.test_put_object_with_sse()
             self.test_get_object_with_sse()
+            
+            # SSE Bucket-level Encryption Tests
+            self.test_put_object_sse_bucket_single_part()
+            self.test_put_object_sse_bucket_multipart()
+            self.test_get_object_sse_bucket_single_part()
+            self.test_get_object_sse_bucket_multipart()
+            self.test_get_object_multipart_sse_bucket()
+            
             self.test_delete_bucket_encryption()
             
             # Lifecycle Rules Operations
@@ -961,6 +1102,11 @@ class S3TestSuite:
             'put_object_with_sse': self.test_put_object_with_sse,
             'get_object_with_sse': self.test_get_object_with_sse,
             'delete_bucket_encryption': self.test_delete_bucket_encryption,
+            'put_object_sse_bucket_single_part': self.test_put_object_sse_bucket_single_part,
+            'put_object_sse_bucket_multipart': self.test_put_object_sse_bucket_multipart,
+            'get_object_sse_bucket_single_part': self.test_get_object_sse_bucket_single_part,
+            'get_object_sse_bucket_multipart': self.test_get_object_sse_bucket_multipart,
+            'get_object_multipart_sse_bucket': self.test_get_object_multipart_sse_bucket,
             # Lifecycle Rules Operations
             'put_bucket_lifecycle_configuration': self.test_put_bucket_lifecycle_configuration,
             'get_bucket_lifecycle_configuration': self.test_get_bucket_lifecycle_configuration,
