@@ -17,11 +17,13 @@ class S3TestSuite:
         self.test_object_key2 = "test-object-copy.txt"
         self.test_object_lock_key = "test-object-lock-retention.txt"
         self.test_object_5mb = "test-object-5mb.bin"
+        self.test_object_10mb = "test-object-10mb.bin"
         self.test_object_1kb = "test-object-1kb.bin"
         self.test_object_50mb = "test-object-50mb.bin"
         self.test_file_path = None
         self.test_file_path2 = None
         self.test_file_path_5mb = None
+        self.test_file_path_10mb = None
         self.test_file_path_1kb = None
         self.test_file_path_50mb = None
 
@@ -164,6 +166,14 @@ class S3TestSuite:
             for _ in range(5):
                 f.write(chunk)
         
+        # Create 10MB test file
+        self.test_file_path_10mb = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        with open(self.test_file_path_10mb, 'wb') as f:
+            # Write 10MB of data (10 * 1024 * 1024 bytes)
+            chunk = b'A' * (1024 * 1024)  # 1MB chunk
+            for _ in range(10):
+                f.write(chunk)
+        
         # Create 50MB test file
         self.test_file_path_50mb = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
         with open(self.test_file_path_50mb, 'wb') as f:
@@ -172,11 +182,11 @@ class S3TestSuite:
             for _ in range(50):
                 f.write(chunk)
         
-        print(f"✓ Setup complete - Test files created (1KB, 5MB, and 50MB files)")
+        print(f"✓ Setup complete - Test files created (1KB, 5MB, 10MB, and 50MB files)")
     
     def teardown(self):
         """Cleanup test environment."""
-        for file_path in [self.test_file_path, self.test_file_path2, self.test_file_path_5mb, self.test_file_path_1kb, self.test_file_path_50mb]:
+        for file_path in [self.test_file_path, self.test_file_path2, self.test_file_path_5mb, self.test_file_path_10mb, self.test_file_path_1kb, self.test_file_path_50mb]:
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
         print("✓ Cleanup complete - Test files removed")
@@ -330,7 +340,7 @@ class S3TestSuite:
         return result['status'] == 'success'
     
     def test_get_public_access_block(self):
-        """Test: Get public access block"""
+        """Test: Get public access block configuration..."""
         print("\n[TEST] Getting public access block configuration...")
         result = self.s3_ops.get_public_access_block(self.test_bucket)
         self._log_result('get_public_access_block', result)
@@ -1004,6 +1014,12 @@ class S3TestSuite:
             self.test_get_object_sse_bucket_multipart()
             self.test_get_object_multipart_sse_bucket()
             
+            # MD5/ETag Verification Tests
+            self.test_single_part_put_verify_md5_etag()
+            self.test_multipart_put_verify_md5_etag()
+            self.test_single_part_put_sse_verify_md5_etag()
+            self.test_multipart_put_sse_verify_md5_etag()
+            
             self.test_delete_bucket_encryption()
             
             # Lifecycle Rules Operations
@@ -1107,6 +1123,12 @@ class S3TestSuite:
             'get_object_sse_bucket_single_part': self.test_get_object_sse_bucket_single_part,
             'get_object_sse_bucket_multipart': self.test_get_object_sse_bucket_multipart,
             'get_object_multipart_sse_bucket': self.test_get_object_multipart_sse_bucket,
+            # New MD5/ETag verification tests
+            'single_part_put_verify_md5_etag': self.test_single_part_put_verify_md5_etag,
+            'multipart_put_verify_md5_etag': self.test_multipart_put_verify_md5_etag,
+            'single_part_put_sse_verify_md5_etag': self.test_single_part_put_sse_verify_md5_etag,
+            'test_single_part_put_sse_verify_md5_etag': self.test_single_part_put_sse_verify_md5_etag,
+            'multipart_put_sse_verify_md5_etag': self.test_multipart_put_sse_verify_md5_etag,
             # Lifecycle Rules Operations
             'put_bucket_lifecycle_configuration': self.test_put_bucket_lifecycle_configuration,
             'get_bucket_lifecycle_configuration': self.test_get_bucket_lifecycle_configuration,
@@ -1198,3 +1220,168 @@ class S3TestSuite:
                     print(f"  - {result['test']}: {result['result'].get('message', 'Unknown error')}")
         
         print("=" * 60)
+
+    def test_single_part_put_verify_md5_etag(self):
+        """Test: Single part PUT, verifying MD5 and ETag."""
+        import hashlib
+        print("\n[TEST] Single part PUT, verifying MD5 and ETag...")
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        test_content = 'test content for MD5 validation'
+        with open(temp_file, 'w') as f:
+            f.write(test_content)
+        
+        try:
+            # Calculate expected MD5 hash
+            with open(temp_file, 'rb') as f:
+                expected_md5 = hashlib.md5(f.read()).hexdigest()
+            print(f"  └─ Expected MD5: {expected_md5}")
+            
+            result = self.s3_ops.put_object(self.test_bucket, self.test_object_key, temp_file)
+            if result['status'] != 'success':
+                return False
+
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
+            etag = meta['ETag'].strip('"')
+            print(f"  └─ Received ETag: {etag}")
+            
+            # Validate MD5 matches ETag for single part uploads
+            if expected_md5 == etag:
+                result['message'] = f"✓ MD5 and ETag validation successful! MD5: {expected_md5}"
+                result['md5_validated'] = True
+            else:
+                result['status'] = 'error'
+                result['message'] = f"✗ MD5 mismatch! Expected: {expected_md5}, Got: {etag}"
+                result['md5_validated'] = False
+            
+            self._log_result('single_part_put_verify_md5_etag', result)
+            return result['status'] == 'success'
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+    def test_multipart_put_verify_md5_etag(self):
+        """Test: Multipart PUT, verifying MD5 and ETag."""
+        import hashlib
+        print("\n[TEST] Multipart PUT, verifying MD5 and ETag...")
+        
+        try:
+            # Calculate expected MD5 hash of 10MB file
+            with open(self.test_file_path_10mb, 'rb') as f:
+                expected_md5 = hashlib.md5(f.read()).hexdigest()
+            print(f"  └─ Expected MD5 of 10MB file: {expected_md5}")
+            
+            # Upload 10MB file using FORCED multipart
+            result = self.s3_ops.put_object_multipart_force(self.test_bucket, self.test_object_10mb, self.test_file_path_10mb)
+            if result['status'] != 'success':
+                return False
+
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_10mb)
+            etag = meta['ETag'].strip('"')
+            print(f"  └─ Received ETag: {etag}")
+            print(f"  └─ Upload Type: {result.get('upload_type', 'unknown')} ({result.get('parts_count', 0)} parts)")
+            
+            # For forced multipart uploads, ETag should have format: <hash>-<part_count>
+            if '-' in etag:
+                parts_count = etag.split('-')[1]
+                result['message'] = f"✓ Forced Multipart ETag validation successful! ETag: {etag} (Parts: {parts_count})"
+                result['etag_validated'] = True
+                result['multipart_etag'] = etag
+                result['parts_count'] = parts_count
+                result['upload_type'] = 'multipart'
+            else:
+                result['status'] = 'error'
+                result['message'] = f"✗ Expected multipart ETag format but got single-part: {etag}"
+                result['etag_validated'] = False
+            
+            self._log_result('multipart_put_verify_md5_etag', result)
+            return result['status'] == 'success'
+        except Exception as e:
+            result = {'status': 'error', 'message': f'Multipart MD5/ETag validation failed: {str(e)}'}
+            self._log_result('multipart_put_verify_md5_etag', result)
+            return False
+
+    def test_single_part_put_sse_verify_md5_etag(self):
+        """Test: Single part PUT with SSE, verifying MD5 and ETag."""
+        import hashlib
+        print("\n[TEST] Single part PUT with SSE, verifying MD5 and ETag...")
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        test_content = 'test content for SSE MD5 validation'
+        with open(temp_file, 'w') as f:
+            f.write(test_content)
+
+        try:
+            # Calculate expected MD5 hash
+            with open(temp_file, 'rb') as f:
+                expected_md5 = hashlib.md5(f.read()).hexdigest()
+            print(f"  └─ Expected MD5: {expected_md5}")
+            
+            result = self.s3_ops.put_object_with_sse(self.test_bucket, self.test_object_key, temp_file, sse_algorithm='AES256')
+            if result['status'] != 'success':
+                return False
+
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key=self.test_object_key)
+            etag = meta['ETag'].strip('"')
+            server_side_encryption = meta.get('ServerSideEncryption', 'None')
+            print(f"  └─ Received ETag: {etag}")
+            print(f"  └─ Server-side encryption: {server_side_encryption}")
+            
+            # Validate MD5 matches ETag for single part uploads with SSE
+            if expected_md5 == etag:
+                result['message'] = f"✓ SSE MD5 and ETag validation successful! MD5: {expected_md5}, SSE: {server_side_encryption}"
+                result['md5_validated'] = True
+                result['sse_enabled'] = server_side_encryption != 'None'
+            else:
+                result['status'] = 'error'
+                result['message'] = f"✗ SSE MD5 mismatch! Expected: {expected_md5}, Got: {etag}"
+                result['md5_validated'] = False
+            
+            self._log_result('single_part_put_sse_verify_md5_etag', result)
+            return result['status'] == 'success'
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+    def test_multipart_put_sse_verify_md5_etag(self):
+        """Test: Multipart PUT with SSE, verifying MD5 and ETag."""
+        import hashlib
+        print("\n[TEST] Multipart PUT with SSE, verifying MD5 and ETag...")
+        
+        try:
+            # Calculate expected MD5 hash of 10MB file
+            with open(self.test_file_path_10mb, 'rb') as f:
+                expected_md5 = hashlib.md5(f.read()).hexdigest()
+            print(f"  └─ Expected MD5 of 10MB file: {expected_md5}")
+            
+            # Upload 10MB file using FORCED multipart with SSE
+            result = self.s3_ops.put_object_multipart_sse_force(self.test_bucket, 'sse-multipart-test.bin', self.test_file_path_10mb)
+            if result['status'] != 'success':
+                return False
+
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key='sse-multipart-test.bin')
+            etag = meta['ETag'].strip('"')
+            server_side_encryption = meta.get('ServerSideEncryption', 'None')
+            print(f"  └─ Received ETag: {etag}")
+            print(f"  └─ Server-side encryption: {server_side_encryption}")
+            print(f"  └─ Upload Type: {result.get('upload_type', 'unknown')} ({result.get('parts_count', 0)} parts)")
+            
+            # For forced multipart uploads with SSE, ETag should have format: <hash>-<part_count>
+            if '-' in etag:
+                parts_count = etag.split('-')[1]
+                result['message'] = f"✓ Forced SSE Multipart ETag validation successful! ETag: {etag} (Parts: {parts_count}), SSE: {server_side_encryption}"
+                result['etag_validated'] = True
+                result['sse_enabled'] = server_side_encryption != 'None'
+                result['multipart_etag'] = etag
+                result['parts_count'] = parts_count
+                result['upload_type'] = 'multipart'
+            else:
+                result['status'] = 'error'
+                result['message'] = f"✗ Expected multipart ETag format with SSE but got single-part: {etag}"
+                result['etag_validated'] = False
+                result['sse_enabled'] = server_side_encryption != 'None'
+            
+            self._log_result('multipart_put_sse_verify_md5_etag', result)
+            return result['status'] == 'success'
+        except Exception as e:
+            result = {'status': 'error', 'message': f'SSE Multipart MD5/ETag validation failed: {str(e)}'}
+            self._log_result('multipart_put_sse_verify_md5_etag', result)
+            return False

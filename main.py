@@ -18,6 +18,9 @@ Examples:
   python main.py --test put_object_if_not_match     # Run put_object_if_not_match test (Conditional ETag not match)
   python main.py --test copy_object                 # Run copy_object test
   python main.py --test put_get_5mb_immediate       # Put 5MB and get immediately
+  python main.py --test single_part_put_verify_md5_etag     # Test MD5/ETag validation for single part
+  python main.py --test multipart_put_verify_md5_etag       # Test ETag validation for multipart
+  python main.py --test test_single_part_put_sse_verify_md5_etag  # Test SSE with MD5/ETag validation
 
 BUCKET LEVEL OPERATIONS:
   - create_bucket, delete_bucket, head_bucket
@@ -65,6 +68,12 @@ SSE (SERVER-SIDE ENCRYPTION) OPERATIONS:
   - put_object_with_sse (Upload object with encryption)
   - get_object_with_sse (Download encrypted object)
   - delete_bucket_encryption (Remove bucket encryption)
+
+MD5/ETAG VERIFICATION OPERATIONS:
+  - single_part_put_verify_md5_etag (Single part PUT with MD5/ETag validation)
+  - multipart_put_verify_md5_etag (Multipart PUT with ETag validation)
+  - test_single_part_put_sse_verify_md5_etag (Single part PUT with SSE and MD5/ETag validation)
+  - multipart_put_sse_verify_md5_etag (Multipart PUT with SSE and ETag validation)
 
 LIFECYCLE RULES OPERATIONS:
   - put_bucket_lifecycle_configuration (Set lifecycle rules)

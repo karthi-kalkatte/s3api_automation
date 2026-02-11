@@ -546,6 +546,159 @@ class S3Operations:
         except Exception as e:
             return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
     
+    def put_object_multipart_force(self, bucket_name: str, object_key: str, file_path: str, part_size: int = 5 * 1024 * 1024) -> dict:
+        """Force multipart upload regardless of file size."""
+        try:
+            # Initiate multipart upload
+            response = self.s3_client.create_multipart_upload(Bucket=bucket_name, Key=object_key)
+            upload_id = response['UploadId']
+            
+            parts = []
+            part_number = 1
+            
+            with open(file_path, 'rb') as f:
+                while True:
+                    # Read part data
+                    part_data = f.read(part_size)
+                    if not part_data:
+                        break
+                    
+                    # Upload part
+                    part_response = self.s3_client.upload_part(
+                        Bucket=bucket_name,
+                        Key=object_key,
+                        PartNumber=part_number,
+                        UploadId=upload_id,
+                        Body=part_data
+                    )
+                    
+                    parts.append({
+                        'ETag': part_response['ETag'],
+                        'PartNumber': part_number
+                    })
+                    part_number += 1
+            
+            # Complete multipart upload
+            self.s3_client.complete_multipart_upload(
+                Bucket=bucket_name,
+                Key=object_key,
+                UploadId=upload_id,
+                MultipartUpload={'Parts': parts}
+            )
+            
+            return {
+                'status': 'success',
+                'message': f'Object {object_key} uploaded via forced multipart ({len(parts)} parts)',
+                'parts_count': len(parts),
+                'upload_type': 'multipart'
+            }
+        except FileNotFoundError:
+            return {'status': 'error', 'message': f'File not found: {file_path}'}
+        except ClientError as e:
+            # Abort multipart upload if something went wrong
+            try:
+                self.s3_client.abort_multipart_upload(
+                    Bucket=bucket_name,
+                    Key=object_key,
+                    UploadId=upload_id
+                )
+            except:
+                pass
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            # Abort multipart upload if something went wrong
+            try:
+                self.s3_client.abort_multipart_upload(
+                    Bucket=bucket_name,
+                    Key=object_key,
+                    UploadId=upload_id
+                )
+            except:
+                pass
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
+    def put_object_multipart_sse_force(self, bucket_name: str, object_key: str, file_path: str, sse_algorithm: str = 'AES256', part_size: int = 5 * 1024 * 1024) -> dict:
+        """Force multipart upload with SSE regardless of file size."""
+        try:
+            # Initiate multipart upload with SSE
+            create_args = {
+                'Bucket': bucket_name,
+                'Key': object_key,
+                'ServerSideEncryption': sse_algorithm
+            }
+            
+            response = self.s3_client.create_multipart_upload(**create_args)
+            upload_id = response['UploadId']
+            
+            parts = []
+            part_number = 1
+            
+            with open(file_path, 'rb') as f:
+                while True:
+                    # Read part data
+                    part_data = f.read(part_size)
+                    if not part_data:
+                        break
+                    
+                    # Upload part with SSE
+                    upload_args = {
+                        'Bucket': bucket_name,
+                        'Key': object_key,
+                        'PartNumber': part_number,
+                        'UploadId': upload_id,
+                        'Body': part_data,
+                        'ServerSideEncryption': sse_algorithm
+                    }
+                    
+                    part_response = self.s3_client.upload_part(**upload_args)
+                    
+                    parts.append({
+                        'ETag': part_response['ETag'],
+                        'PartNumber': part_number
+                    })
+                    part_number += 1
+            
+            # Complete multipart upload
+            self.s3_client.complete_multipart_upload(
+                Bucket=bucket_name,
+                Key=object_key,
+                UploadId=upload_id,
+                MultipartUpload={'Parts': parts}
+            )
+            
+            return {
+                'status': 'success',
+                'message': f'Object {object_key} uploaded via forced multipart with {sse_algorithm} SSE ({len(parts)} parts)',
+                'parts_count': len(parts),
+                'upload_type': 'multipart',
+                'sse_enabled': True,
+                'sse_algorithm': sse_algorithm
+            }
+        except FileNotFoundError:
+            return {'status': 'error', 'message': f'File not found: {file_path}'}
+        except ClientError as e:
+            # Abort multipart upload if something went wrong
+            try:
+                self.s3_client.abort_multipart_upload(
+                    Bucket=bucket_name,
+                    Key=object_key,
+                    UploadId=upload_id
+                )
+            except:
+                pass
+            return {'status': 'error', 'message': str(e)}
+        except Exception as e:
+            # Abort multipart upload if something went wrong
+            try:
+                self.s3_client.abort_multipart_upload(
+                    Bucket=bucket_name,
+                    Key=object_key,
+                    UploadId=upload_id
+                )
+            except:
+                pass
+            return {'status': 'error', 'message': f'Unexpected error: {str(e)}'}
+    
     # ============ OBJECT LOCK OPERATIONS ============
     
     def get_object_lock_configuration(self, bucket_name: str) -> dict:
