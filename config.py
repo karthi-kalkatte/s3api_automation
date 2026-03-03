@@ -6,8 +6,9 @@ import os
 class S3Config:
     """Load and manage S3 configuration."""
     
-    def __init__(self, credentials_file="credentials.json"):
+    def __init__(self, credentials_file="credentials.json", provider="e2"):
         self.credentials_file = credentials_file
+        self.provider = provider
         self.config = self._load_credentials()
     
     def _load_credentials(self):
@@ -16,7 +17,13 @@ class S3Config:
             raise FileNotFoundError(f"Credentials file not found: {self.credentials_file}")
         
         with open(self.credentials_file, 'r') as f:
-            return json.load(f)
+            full_config = json.load(f)
+            
+        # If provider exists in config, use it; otherwise use config as-is (for backward compatibility)
+        if self.provider in full_config:
+            return full_config[self.provider]
+        else:
+            return full_config
     
     @property
     def access_key(self):

@@ -5,13 +5,13 @@ import re
 from pathlib import Path
 
 # Read s3_operations.py
-ops_file = Path('s3_operations.py').read_text()
+ops_file = Path('s3_operations.py').read_text(encoding='utf-8')
 # Extract all method names (except __init__)
 ops_methods = set(re.findall(r'def (\w+)\(self', ops_file))
 ops_methods.discard('__init__')
 
 # Read test_suite.py
-test_file = Path('test_suite.py').read_text()
+test_file = Path('test_suite.py').read_text(encoding='utf-8')
 # Extract all test method names
 test_methods = set(re.findall(r'def (test_\w+)\(self', test_file))
 

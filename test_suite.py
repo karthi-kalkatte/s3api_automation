@@ -455,6 +455,817 @@ class S3TestSuite:
         self._log_result('list_multipart_uploads', result)
         return result['status'] == 'success'
     
+    def test_put_object_http_if_match_success(self):
+        """Test: PUT with If-Match HTTP header (success case for job queue)"""
+        print("\n[TEST] PUT with HTTP If-Match header (success case)...")
+        
+        # Create test content
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        original_content = 'job_queue_task_v1'
+        with open(temp_file, 'w') as f:
+            f.write(original_content)
+        
+        try:
+            # Upload initial object
+            result_upload = self.s3_ops.put_object(self.test_bucket, 'job-queue-task.json', temp_file)
+            if result_upload['status'] != 'success':
+                return False
+                
+            # Get current ETag
+            meta = self.s3_ops.s3_client.head_object(Bucket=self.test_bucket, Key='job-queue-task.json')
+            current_etag = meta['ETag']
+            print(f"  └─ Current ETag: {current_etag}")
+            
+            # Create updated content
+            updated_content = 'job_queue_task_v2_updated'
+            with open(temp_file, 'w') as f:
+                f.write(updated_content)
+            
+            # PUT with If-Match header (should succeed - compare-and-swap)
+            print(f"  └─ Attempting compare-and-swap with ETag: {current_etag}")
+            with open(temp_file, 'rb') as f:
+                response = self.s3_ops.s3_client.put_object(
+                    Bucket=self.test_bucket,
+                    Key='job-queue-task.json',
+                    Body=f,
+                    IfMatch=current_etag
+                )
+            
+            result = {
+                'status': 'success',
+                'message': f'HTTP If-Match success! Compare-and-swap completed. New ETag: {response["ETag"]}',
+                'original_etag': current_etag,
+                'new_etag': response['ETag'],
+                'http_status': 200
+            }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'HTTP If-Match test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('put_object_http_if_match_success', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_http_if_match_412_failure(self):
+        """Test: PUT with If-Match HTTP header (412 Precondition Failed)"""
+        print("\n[TEST] PUT with HTTP If-Match header (412 failure case)...")
+        
+        # Create test content
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        original_content = 'job_queue_initial_state'
+        with open(temp_file, 'w') as f:
+            f.write(original_content)
+        
+        try:
+            # Upload initial object
+            result_upload = self.s3_ops.put_object(self.test_bucket, 'job-queue-cas-test.json', temp_file)
+            if result_upload['status'] != 'success':
+                return False
+            
+            # Create updated content
+            updated_content = 'job_queue_attempted_update'
+            with open(temp_file, 'w') as f:
+                f.write(updated_content)
+            
+            # Use wrong/outdated ETag (simulate race condition in job queue)
+            wrong_etag = '"wrong-etag-simulation"'
+            print(f"  └─ Attempting compare-and-swap with WRONG ETag: {wrong_etag}")
+            
+            try:
+                with open(temp_file, 'rb') as f:
+                    response = self.s3_ops.s3_client.put_object(
+                        Bucket=self.test_bucket,
+                        Key='job-queue-cas-test.json',
+                        Body=f,
+                        IfMatch=wrong_etag
+                    )
+                
+                # If we get here, the test failed (should have thrown exception)
+                result = {
+                    'status': 'error',
+                    'message': 'Expected 412 Precondition Failed but operation succeeded!'
+                }
+            
+            except self.s3_ops.s3_client.exceptions.ClientError as e:
+                error_code = e.response['Error']['Code']
+                http_status = e.response['ResponseMetadata']['HTTPStatusCode']
+                
+                if error_code == 'PreconditionFailed' and http_status == 412:
+                    result = {
+                        'status': 'success',
+                        'message': f'✓ Expected 412 Precondition Failed returned! Error: {error_code}',
+                        'http_status': http_status,
+                        'error_code': error_code,
+                        'cas_protection': 'working'
+                    }
+                else:
+                    result = {
+                        'status': 'error',
+                        'message': f'Wrong error! Expected 412/PreconditionFailed, got {http_status}/{error_code}'
+                    }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'HTTP If-Match 412 test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('put_object_http_if_match_412_failure', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_http_if_none_match_success(self):
+        """Test: PUT with If-None-Match: * HTTP header (success - object doesn't exist)"""
+        print("\n[TEST] PUT with HTTP If-None-Match: * header (success case)...")
+        
+        # Create test content for new job
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        job_content = 'new_exclusive_job_initialization'
+        with open(temp_file, 'w') as f:
+            f.write(job_content)
+        
+        try:
+            # Ensure object doesn't exist
+            new_job_key = f'exclusive-job-{os.urandom(4).hex()}.json'
+            print(f"  └─ Creating new exclusive job: {new_job_key}")
+            
+            # PUT with If-None-Match: * (should succeed - object doesn't exist)
+            with open(temp_file, 'rb') as f:
+                response = self.s3_ops.s3_client.put_object(
+                    Bucket=self.test_bucket,
+                    Key=new_job_key,
+                    Body=f,
+                    IfNoneMatch='*'
+                )
+            
+            result = {
+                'status': 'success',
+                'message': f'✓ HTTP If-None-Match success! Exclusive job created. ETag: {response["ETag"]}',
+                'job_key': new_job_key,
+                'etag': response['ETag'],
+                'http_status': 200,
+                'exclusive_create': True
+            }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'HTTP If-None-Match success test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('put_object_http_if_none_match_success', result)
+        return result['status'] == 'success'
+    
+    def test_put_object_http_if_none_match_409_failure(self):
+        """Test: PUT with If-None-Match: * HTTP header (409 Conflict - object exists)"""
+        print("\n[TEST] PUT with HTTP If-None-Match: * header (409 Conflict case)...")
+        
+        # Create test content
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        initial_content = 'existing_job_state'
+        with open(temp_file, 'w') as f:
+            f.write(initial_content)
+        
+        try:
+            # Upload initial object (ensure it exists)
+            existing_job_key = 'existing-job-conflict-test.json'
+            result_upload = self.s3_ops.put_object(self.test_bucket, existing_job_key, temp_file)
+            if result_upload['status'] != 'success':
+                return False
+                
+            print(f"  └─ Object exists. Attempting exclusive create with If-None-Match: *")
+            
+            # Try to create with If-None-Match: * (should fail with 409 Conflict or 412 Precondition Failed)
+            duplicate_content = 'attempted_duplicate_job'
+            with open(temp_file, 'w') as f:
+                f.write(duplicate_content)
+            
+            try:
+                with open(temp_file, 'rb') as f:
+                    response = self.s3_ops.s3_client.put_object(
+                        Bucket=self.test_bucket,
+                        Key=existing_job_key,
+                        Body=f,
+                        IfNoneMatch='*'
+                    )
+                
+                # If we get here, the test failed
+                result = {
+                    'status': 'error',
+                    'message': 'Expected 409 Conflict or 412 Precondition Failed but operation succeeded!'
+                }
+            
+            except self.s3_ops.s3_client.exceptions.ClientError as e:
+                error_code = e.response['Error']['Code']
+                http_status = e.response['ResponseMetadata']['HTTPStatusCode']
+                
+                # Check for either 409 Conflict or 412 Precondition Failed (S3 implementations vary)
+                if (error_code == 'Conflict' and http_status == 409) or (error_code == 'PreconditionFailed' and http_status == 412):
+                    result = {
+                        'status': 'success',
+                        'message': f'✓ Expected {http_status} {error_code} returned! Duplicate prevention working.',
+                        'http_status': http_status,
+                        'error_code': error_code,
+                        'duplicate_prevention': 'working',
+                        's3_behavior': f'{http_status}_{error_code}'
+                    }
+                else:
+                    result = {
+                        'status': 'error',
+                        'message': f'Wrong error! Expected 409/Conflict or 412/PreconditionFailed, got {http_status}/{error_code}'
+                    }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'HTTP If-None-Match 409/412 test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('put_object_http_if_none_match_409_failure', result)
+        return result['status'] == 'success'
+    
+    def test_multipart_repeat_same_part(self):
+        """Test: Repeat upload of same part before completing multipart"""
+        print("\n[TEST] Multipart upload with repeated part...")
+        import hashlib
+        
+        # Create test content for two parts (5MB each to meet S3 minimum part size)
+        part1_content = b'A' * (5 * 1024 * 1024)  # 5MB
+        part2_content = b'B' * (5 * 1024 * 1024)  # 5MB
+        total_content = part1_content + part2_content
+        
+        # Create temporary file with the content
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+        with open(temp_file, 'wb') as f:
+            f.write(total_content)
+        
+        try:
+            # Calculate expected MD5 of final content
+            expected_md5 = hashlib.md5(total_content).hexdigest()
+            print(f"  └─ Expected final MD5: {expected_md5} (10MB total: 5MB + 5MB)")
+            
+            # Initiate multipart upload
+            init_result = self.s3_ops.s3_client.create_multipart_upload(
+                Bucket=self.test_bucket,
+                Key='multipart-repeat-test.bin'
+            )
+            upload_id = init_result['UploadId']
+            print(f"  └─ Initiated multipart upload: {upload_id}")
+            
+            parts = []
+            
+            # Upload Part 1 (first attempt)
+            print("  └─ Uploading Part 1 - 5MB (first attempt)...")
+            part1_response = self.s3_ops.s3_client.upload_part(
+                Bucket=self.test_bucket,
+                Key='multipart-repeat-test.bin',
+                PartNumber=1,
+                UploadId=upload_id,
+                Body=part1_content
+            )
+            first_etag = part1_response['ETag']
+            print(f"    └─ Part 1 first upload ETag: {first_etag}")
+            
+            # Upload Part 1 again (repeat/retry scenario)
+            print("  └─ Re-uploading Part 1 - 5MB (repeat attempt)...")
+            part1_repeat_response = self.s3_ops.s3_client.upload_part(
+                Bucket=self.test_bucket,
+                Key='multipart-repeat-test.bin',
+                PartNumber=1,
+                UploadId=upload_id,
+                Body=part1_content
+            )
+            repeat_etag = part1_repeat_response['ETag']
+            print(f"    └─ Part 1 repeat upload ETag: {repeat_etag}")
+            
+            # Use the latest (repeat) ETag for part 1
+            parts.append({
+                'ETag': repeat_etag,
+                'PartNumber': 1
+            })
+            
+            # Upload Part 2
+            print("  └─ Uploading Part 2 - 5MB...")
+            part2_response = self.s3_ops.s3_client.upload_part(
+                Bucket=self.test_bucket,
+                Key='multipart-repeat-test.bin',
+                PartNumber=2,
+                UploadId=upload_id,
+                Body=part2_content
+            )
+            parts.append({
+                'ETag': part2_response['ETag'],
+                'PartNumber': 2
+            })
+            print(f"    └─ Part 2 ETag: {part2_response['ETag']}")
+            
+            # Complete multipart upload
+            print("  └─ Completing multipart upload...")
+            self.s3_ops.s3_client.complete_multipart_upload(
+                Bucket=self.test_bucket,
+                Key='multipart-repeat-test.bin',
+                UploadId=upload_id,
+                MultipartUpload={'Parts': parts}
+            )
+            
+            # Verify the final object
+            print("  └─ Verifying final object...")
+            download_path = tempfile.NamedTemporaryFile(delete=False, suffix='.bin').name
+            get_result = self.s3_ops.get_object(self.test_bucket, 'multipart-repeat-test.bin', download_path)
+            
+            if get_result['status'] == 'success':
+                # Verify content matches expected
+                with open(download_path, 'rb') as f:
+                    downloaded_content = f.read()
+                
+                downloaded_md5 = hashlib.md5(downloaded_content).hexdigest()
+                
+                if downloaded_md5 == expected_md5 and len(downloaded_content) == len(total_content):
+                    result = {
+                        'status': 'success',
+                        'message': f'Multipart upload with repeated part successful! Final size: {len(downloaded_content) / (1024*1024):.1f}MB, ETags: {first_etag} -> {repeat_etag}',
+                        'first_part_etag': first_etag,
+                        'repeat_part_etag': repeat_etag,
+                        'final_size_mb': len(downloaded_content) / (1024*1024),
+                        'md5_match': True
+                    }
+                else:
+                    result = {
+                        'status': 'error',
+                        'message': f'Content verification failed. Expected MD5: {expected_md5}, Got: {downloaded_md5}'
+                    }
+            else:
+                result = get_result
+            
+            # Cleanup download file
+            if os.path.exists(download_path):
+                os.remove(download_path)
+            
+        except Exception as e:
+            # Abort multipart upload on error
+            try:
+                self.s3_ops.s3_client.abort_multipart_upload(
+                    Bucket=self.test_bucket,
+                    Key='multipart-repeat-test.bin',
+                    UploadId=upload_id
+                )
+            except:
+                pass
+            result = {'status': 'error', 'message': f'Multipart repeat test failed: {str(e)}'}
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('multipart_repeat_same_part', result)
+        return result['status'] == 'success'
+    
+    # ============ PRESIGNED URL CONDITIONAL TESTS ============
+    # 
+    # IMPORTANT FINDING: IDrive E2's presigned URLs do NOT properly enforce 
+    # conditional headers (If-Match, If-None-Match). While the URLs are generated
+    # correctly with these parameters, the actual PUT operations ignore the 
+    # conditional logic and succeed even when conditions should fail.
+    #
+    # For distributed job queue systems:
+    # ✅ USE: Direct boto3 calls with conditional headers (fully supported)
+    # ❌ AVOID: Presigned URLs for atomic operations (not reliable)
+    #
+    # This is a common limitation across S3-compatible services.
+    # 
+    def test_presigned_put_if_match_success(self):
+        """Test: Presigned PUT URL + If-Match header (success case)"""
+        print("\n[TEST] Presigned PUT with If-Match header (success case)...")
+        import requests
+        
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        original_content = 'presigned_job_v1'
+        with open(temp_file, 'w') as f:
+            f.write(original_content)
+        
+        try:
+            # Upload initial object to get ETag
+            job_key = 'presigned-job-if-match-success.json'
+            print(f"  └─ Creating initial job: {job_key}")
+            
+            with open(temp_file, 'rb') as f:
+                response = self.s3_ops.s3_client.put_object(
+                    Bucket=self.test_bucket,
+                    Key=job_key,
+                    Body=f
+                )
+            
+            current_etag = response['ETag'].strip('"')
+            print(f"  └─ Current ETag: {current_etag}")
+            
+            # Create updated content
+            updated_content = 'presigned_job_v2_updated'
+            with open(temp_file, 'w') as f:
+                f.write(updated_content)
+            
+            # Generate presigned URL (without conditional parameters)
+            print(f"  └─ Generating presigned PUT URL...")
+            presigned_url = self.s3_ops.s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': self.test_bucket,
+                    'Key': job_key
+                },
+                ExpiresIn=300  # 5 minutes
+            )
+            print(f"  └─ Generated Presigned URL:")
+            print(f"     {presigned_url}")
+            
+            # Use presigned URL with If-Match HTTP header
+            print(f"  └─ Sending PUT with If-Match HTTP header: {current_etag}")
+            with open(temp_file, 'rb') as f:
+                http_response = requests.put(
+                    presigned_url, 
+                    data=f.read(),
+                    headers={'If-Match': current_etag}
+                )
+            
+            if http_response.status_code == 200:
+                new_etag = http_response.headers.get('ETag', '').strip('"')
+                result = {
+                    'status': 'success',
+                    'message': f'✓ Presigned PUT with If-Match success! Old ETag: {current_etag}, New ETag: {new_etag}',
+                    'old_etag': current_etag,
+                    'new_etag': new_etag,
+                    'http_status': 200,
+                    'presigned_url_conditional': True,
+                    'compare_and_swap': 'success'
+                }
+            else:
+                result = {
+                    'status': 'error',
+                    'message': f'Presigned PUT failed with status {http_response.status_code}: {http_response.text}'
+                }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'Presigned If-Match success test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('presigned_put_if_match_success', result)
+        return result['status'] == 'success'
+    
+    def test_presigned_put_if_match_412_failure(self):
+        """Test: Presigned PUT URL + If-Match header (expect 412)"""
+        print("\n[TEST] Presigned PUT with If-Match header (412 failure case)...")
+        import requests
+        
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        original_content = "presigned_job_initial"
+        with open(temp_file, "w") as f:
+            f.write(original_content)
+        
+        try:
+            job_key = "presigned-job-if-match-412.json"
+            print(f"  └─ Creating initial job: {job_key}")
+            
+            # 1) Create initial object
+            with open(temp_file, "rb") as f:
+                resp = self.s3_ops.s3_client.put_object(
+                    Bucket=self.test_bucket,
+                    Key=job_key,
+                    Body=f,
+                )
+            
+            current_etag = resp["ETag"].strip('"')
+            print(f"  └─ Current ETag: {current_etag}")
+            
+            # 2) Presign PUT (NO IfMatch in Params - it's an HTTP header, not a URL parameter)
+            presigned_url = self.s3_ops.s3_client.generate_presigned_url(
+                "put_object",
+                Params={"Bucket": self.test_bucket, "Key": job_key},
+                ExpiresIn=300,
+            )
+            print("  └─ Presigned URL generated (without conditional parameters).")
+            print(f"     {presigned_url}")
+            
+            # 3) Write updated content locally
+            updated_content = "presigned_job_should_fail"
+            with open(temp_file, "w") as f:
+                f.write(updated_content)
+            
+            # 4) PUT with WRONG If-Match header -> expect 412
+            wrong_etag = "wrong-etag-12345"
+            print(f"  └─ Attempting presigned PUT with If-Match HTTP header: {wrong_etag}")
+            
+            with open(temp_file, "rb") as f:
+                http_resp = requests.put(
+                    presigned_url,
+                    data=f.read(),
+                    headers={"If-Match": wrong_etag},
+                )
+            
+            print(f"  └─ DEBUG: status={http_resp.status_code}")
+            print(f"  └─ DEBUG: headers={dict(http_resp.headers)}")
+            print(f"  └─ DEBUG: body={http_resp.text[:200]}")
+            
+            if http_resp.status_code == 412:
+                result = {
+                    "status": "success",
+                    "message": "✓ Got expected 412 Precondition Failed for wrong If-Match",
+                    "http_status": 412,
+                    "error_response": "PreconditionFailed",
+                    "presigned_url_conditional": True,
+                }
+            else:
+                result = {
+                    "status": "error",
+                    "message": f"Expected 412, got {http_resp.status_code}: {http_resp.text}",
+                    "debug_info": {
+                        "note": "Your S3-compatible endpoint may not enforce If-Match on PUT, or may require it signed/handled differently.",
+                        "actual_status": http_resp.status_code,
+                        "response_headers": dict(http_resp.headers),
+                    },
+                }
+            
+        except Exception as e:
+            result = {"status": "error", "message": f"Presigned If-Match 412 test failed: {e}"}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result("presigned_put_if_match_412_failure", result)
+        return result["status"] == "success"
+    
+    def test_aws_cli_presigned_if_match_412_failure(self):
+        """Test: AWS CLI presigned PUT with If-Match header (expect 412)"""
+        print("\n[TEST] AWS CLI presigned PUT with If-Match header (412 failure case)...")
+        import subprocess
+        import json
+        
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        original_content = "aws_cli_job_initial"
+        with open(temp_file, "w") as f:
+            f.write(original_content)
+        
+        try:
+            job_key = "aws-cli-presigned-job-if-match-412.json"
+            print(f"  └─ Creating initial job: {job_key}")
+            
+            # Set environment variables for AWS CLI
+            import os
+            env = os.environ.copy()
+            env['AWS_ACCESS_KEY_ID'] = self.config.access_key
+            env['AWS_SECRET_ACCESS_KEY'] = self.config.secret_key
+            env['AWS_DEFAULT_REGION'] = self.config.region
+            
+            # 1) Upload initial object using AWS CLI
+            upload_cmd = [
+                "aws", "s3", "cp", temp_file, 
+                f"s3://{self.test_bucket}/{job_key}",
+                "--endpoint-url", self.config.endpoint_url
+            ]
+            print(f"  └─ Running AWS CLI upload: {' '.join(upload_cmd)}")
+            result_upload = subprocess.run(upload_cmd, capture_output=True, text=True, env=env)
+            print(f"  └─ Upload return code: {result_upload.returncode}")
+            print(f"  └─ Upload stdout: {result_upload.stdout}")
+            print(f"  └─ Upload stderr: {result_upload.stderr}")
+            if result_upload.returncode != 0:
+                result = {"status": "error", "message": f"AWS CLI upload failed: {result_upload.stderr}"}
+                print(f"  └─ FAILED: {result}")
+                self._log_result("aws_cli_presigned_if_match_412_failure", result)
+                return False
+            
+            # 2) Get object metadata to retrieve ETag
+            head_cmd = [
+                "aws", "s3api", "head-object",
+                "--bucket", self.test_bucket,
+                "--key", job_key,
+                "--endpoint-url", self.config.endpoint_url
+            ]
+            print(f"  └─ Running head-object: {' '.join(head_cmd)}")
+            result_head = subprocess.run(head_cmd, capture_output=True, text=True, env=env)
+            print(f"  └─ Head return code: {result_head.returncode}")
+            print(f"  └─ Head stdout: {result_head.stdout}")
+            print(f"  └─ Head stderr: {result_head.stderr}")
+            if result_head.returncode != 0:
+                result = {"status": "error", "message": f"AWS CLI head-object failed: {result_head.stderr}"}
+                print(f"  └─ FAILED: {result}")
+                self._log_result("aws_cli_presigned_if_match_412_failure", result)
+                return False
+            
+            metadata = json.loads(result_head.stdout)
+            current_etag = metadata['ETag'].strip('"')
+            print(f"  └─ Current ETag: {current_etag}")
+            
+            # 3) Generate presigned URL using AWS CLI
+            presign_cmd = [
+                "aws", "s3", "presign",
+                f"s3://{self.test_bucket}/{job_key}",
+                "--expires-in", "300",
+                "--endpoint-url", self.config.endpoint_url
+            ]
+            result_presign = subprocess.run(presign_cmd, capture_output=True, text=True, env=env)
+            if result_presign.returncode != 0:
+                result = {"status": "error", "message": f"Failed to generate presigned URL: {result_presign.stderr}"}
+            else:
+                presigned_url = result_presign.stdout.strip()
+                print("  └─ AWS CLI presigned URL generated.")
+                print(f"     {presigned_url}")
+                
+                # 4) Write updated content locally
+                updated_content = "aws_cli_job_should_fail"
+                with open(temp_file, "w") as f:
+                    f.write(updated_content)
+                
+                # 5) Try PUT with wrong If-Match header using requests
+                wrong_etag = "wrong-etag-12345"
+                print(f"  └─ Attempting presigned PUT via requests with If-Match: {wrong_etag}")
+                
+                # Read content to send
+                with open(temp_file, 'r') as f:
+                    body_content = f.read()
+                
+                try:
+                    import requests
+                    headers = {
+                        'If-Match': wrong_etag,
+                        'Content-Type': 'text/plain'
+                    }
+                    
+                    response = requests.put(presigned_url, data=body_content, headers=headers)
+                    print(f"  └─ DEBUG: AWS CLI + requests status={response.status_code}")
+                    print(f"  └─ DEBUG: Response headers: {dict(response.headers)}")
+                    
+                    if response.status_code == 412:
+                        result = {
+                            "status": "success",
+                            "message": "✓ AWS CLI + requests returned expected 412 Precondition Failed!",
+                            "http_status": 412,
+                            "method": "aws_cli_requests",
+                            "presigned_url_conditional": True,
+                        }
+                    else:
+                        result = {
+                            "status": "error", 
+                            "message": f"✗ AWS CLI + requests method: Expected 412, got {response.status_code}. IDrive E2 ignores conditional headers in presigned URLs!",
+                            "http_status": response.status_code,
+                            "method": "aws_cli_requests",
+                            "presigned_url_conditional": False,
+                        }
+                
+                except Exception as e:
+                    result = {"status": "error", "message": f"Requests failed: {str(e)}"}
+            
+        except Exception as e:
+            result = {"status": "error", "message": f"AWS CLI presigned If-Match test failed: {e}"}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result("aws_cli_presigned_if_match_412_failure", result)
+        return result["status"] == "success"
+    
+    def test_presigned_put_if_none_match_success(self):
+        """Test: Presigned PUT URL + If-None-Match: * header (success case)"""
+        print("\n[TEST] Presigned PUT with If-None-Match: * header (success case)...")
+        import requests
+        
+        # Create test content for new job
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        job_content = 'presigned_exclusive_job_creation'
+        with open(temp_file, 'w') as f:
+            f.write(job_content)
+        
+        try:
+            # Ensure object doesn't exist
+            new_job_key = f'presigned-exclusive-job-{os.urandom(4).hex()}.json'
+            print(f"  └─ Creating new exclusive job via presigned URL: {new_job_key}")
+            
+            # Generate presigned URL (without conditional parameters)
+            presigned_url = self.s3_ops.s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': self.test_bucket,
+                    'Key': new_job_key
+                },
+                ExpiresIn=300  # 5 minutes
+            )
+            print(f"  └─ Generated Presigned URL:")
+            print(f"     {presigned_url}")
+            
+            # Use presigned URL with If-None-Match HTTP header
+            print(f"  └─ Sending PUT with If-None-Match: * HTTP header")
+            with open(temp_file, 'rb') as f:
+                http_response = requests.put(
+                    presigned_url, 
+                    data=f.read(),
+                    headers={'If-None-Match': '*'}
+                )
+            
+            if http_response.status_code == 200:
+                etag = http_response.headers.get('ETag', '').strip('"')
+                result = {
+                    'status': 'success',
+                    'message': f'✓ Presigned PUT If-None-Match success! Exclusive job created. ETag: {etag}',
+                    'job_key': new_job_key,
+                    'etag': etag,
+                    'http_status': 200,
+                    'presigned_url_conditional': True,
+                    'exclusive_create': True
+                }
+            else:
+                result = {
+                    'status': 'error',
+                    'message': f'Presigned PUT If-None-Match failed with status {http_response.status_code}: {http_response.text}'
+                }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'Presigned If-None-Match success test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('presigned_put_if_none_match_success', result)
+        return result['status'] == 'success'
+    
+    def test_presigned_put_if_none_match_409_failure(self):
+        """Test: Presigned PUT URL + If-None-Match: * header (expect 409/412)"""
+        print("\n[TEST] Presigned PUT with If-None-Match: * header (409 Conflict case)...")
+        import requests
+        
+        # Create test content
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt').name
+        initial_content = 'presigned_existing_job'
+        with open(temp_file, 'w') as f:
+            f.write(initial_content)
+        
+        try:
+            # Upload initial object (ensure it exists)
+            existing_job_key = 'presigned-existing-job-conflict.json'
+            result_upload = self.s3_ops.put_object(self.test_bucket, existing_job_key, temp_file)
+            if result_upload['status'] != 'success':
+                return False
+                
+            print(f"  └─ Object exists. Attempting exclusive create via presigned URL with If-None-Match: *")
+            
+            # Generate presigned URL (without conditional parameters)
+            presigned_url = self.s3_ops.s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': self.test_bucket,
+                    'Key': existing_job_key
+                },
+                ExpiresIn=300  # 5 minutes
+            )
+            print(f"  └─ Generated Presigned URL:")
+            print(f"     {presigned_url}")
+            
+            # Try to create with If-None-Match HTTP header (should fail)
+            duplicate_content = 'presigned_attempted_duplicate'
+            with open(temp_file, 'w') as f:
+                f.write(duplicate_content)
+            
+            print(f"  └─ Sending PUT with If-None-Match: * HTTP header")
+            with open(temp_file, 'rb') as f:
+                http_response = requests.put(
+                    presigned_url, 
+                    data=f.read(),
+                    headers={'If-None-Match': '*'}
+                )
+            
+            print(f"  └─ DEBUG: status={http_response.status_code}")
+            print(f"  └─ DEBUG: headers={dict(http_response.headers)}")
+            print(f"  └─ DEBUG: body={http_response.text[:200]}")
+            
+            # Should get 409 Conflict or 412 Precondition Failed
+            if http_response.status_code in [409, 412]:
+                error_name = 'Conflict' if http_response.status_code == 409 else 'PreconditionFailed'
+                result = {
+                    'status': 'success',
+                    'message': f'✓ Presigned PUT If-None-Match returned expected {http_response.status_code} {error_name}!',
+                    'http_status': http_response.status_code,
+                    'error_response': error_name,
+                    'presigned_url_conditional': True,
+                    'duplicate_prevention': 'working'
+                }
+            else:
+                result = {
+                    'status': 'error',
+                    'message': f'Expected 409 Conflict or 412 Precondition Failed, got {http_response.status_code}: {http_response.text}',
+                    'debug_info': {
+                        'note': 'Your S3-compatible endpoint may not enforce If-None-Match on PUT',
+                        'actual_status': http_response.status_code,
+                        'response_headers': dict(http_response.headers)
+                    }
+                }
+            
+        except Exception as e:
+            result = {'status': 'error', 'message': f'Presigned If-None-Match 409/412 test failed: {str(e)}'}
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        
+        self._log_result('presigned_put_if_none_match_409_failure', result)
+        return result['status'] == 'success'
+    
     # ============ LARGE FILE OPERATIONS ============
     
     def test_put_object_5mb(self):
@@ -986,6 +1797,21 @@ class S3TestSuite:
             self.test_copy_object()
             self.test_initiate_multipart_upload()
             self.test_list_multipart_uploads()
+            self.test_multipart_repeat_same_part()
+            
+            # HTTP Header-based Conditional PUTs (for job queue systems)
+            self.test_put_object_http_if_match_success()
+            self.test_put_object_http_if_match_412_failure()
+            self.test_put_object_http_if_none_match_success()
+            self.test_put_object_http_if_none_match_409_failure()
+            
+            # Presigned URL Conditional PUTs (for job queue systems)
+            self.test_presigned_put_if_match_success()
+            self.test_presigned_put_if_match_412_failure()
+            self.test_aws_cli_presigned_if_match_412_failure()  # AWS CLI comparison test
+            self.test_presigned_put_if_none_match_success()
+            self.test_presigned_put_if_none_match_409_failure()
+            
             self.test_list_object_versions()
             
             # Large File Operations
@@ -1090,6 +1916,19 @@ class S3TestSuite:
             'delete_object_tagging': self.test_delete_object_tagging,
             'initiate_multipart_upload': self.test_initiate_multipart_upload,
             'list_multipart_uploads': self.test_list_multipart_uploads,
+            'multipart_repeat_same_part': self.test_multipart_repeat_same_part,
+            # HTTP Header-based Conditional PUTs (for distributed job queues)
+            'put_object_http_if_match_success': self.test_put_object_http_if_match_success,
+            'put_object_http_if_match_412_failure': self.test_put_object_http_if_match_412_failure,
+            'put_object_http_if_none_match_success': self.test_put_object_http_if_none_match_success,
+            'put_object_http_if_none_match_409_failure': self.test_put_object_http_if_none_match_409_failure,
+            # Presigned URL Conditional PUTs (for distributed job queues)
+            'presigned_put_if_match_success': self.test_presigned_put_if_match_success,
+            'presigned_put_if_match_412_failure': self.test_presigned_put_if_match_412_failure,
+            'aws_cli_presigned_if_match_412_failure': self.test_aws_cli_presigned_if_match_412_failure,
+            'presigned_put_if_none_match_success': self.test_presigned_put_if_none_match_success,
+            'presigned_put_if_none_match_409_failure': self.test_presigned_put_if_none_match_409_failure,
+            # Legacy simulated conditional PUTs
             'put_object_if_match': self.test_put_object_if_match,
             'put_object_if_match_fails': self.test_put_object_if_match_fails,
             'put_object_if_not_match': self.test_put_object_if_not_match,
@@ -1150,8 +1989,10 @@ class S3TestSuite:
                 if key in ['put_object', 'get_object', 'head_object', 'copy_object', 'delete_object',
                            'delete_objects', 'list_objects', 'list_object_versions', 'put_object_acl',
                            'get_object_acl', 'put_object_tagging', 'get_object_tagging', 'delete_object_tagging',
-                           'initiate_multipart_upload', 'list_multipart_uploads', 'put_object_if_match',
-                           'put_object_if_match_fails', 'put_object_if_not_match']:
+                           'initiate_multipart_upload', 'list_multipart_uploads', 'multipart_repeat_same_part',
+                           'put_object_http_if_match_success', 'put_object_http_if_match_412_failure',
+                           'put_object_http_if_none_match_success', 'put_object_http_if_none_match_409_failure',
+                           'put_object_if_match', 'put_object_if_match_fails', 'put_object_if_not_match']:
                     print(f"  - {key}")
             return
         
@@ -1385,3 +2226,19 @@ class S3TestSuite:
             result = {'status': 'error', 'message': f'SSE Multipart MD5/ETag validation failed: {str(e)}'}
             self._log_result('multipart_put_sse_verify_md5_etag', result)
             return False
+
+if __name__ == "__main__":
+    import sys
+    
+    # Initialize test suite
+    suite = S3TestSuite()
+    
+    if len(sys.argv) > 1:
+        test_name = sys.argv[1]
+        print(f"Running specific test: {test_name}")
+        if not suite.run_specific_test(test_name):
+            sys.exit(1)
+    else:
+        print("Running all tests...")
+        if not suite.run_all_tests():
+            sys.exit(1)
